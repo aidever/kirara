@@ -432,6 +432,7 @@ fn media_router(
         .route("/maoyan", get(get_maoyan_rank))
         .route("/maoyan/refresh", post(refresh_maoyan_rank))
         .route("/douban/poster", get(get_douban_poster))
+        .route("/douban/subject", get(get_douban_subject))
         .route("/tmdb/details", get(get_tmdb_details_query))
         .route("/tmdb/season", get(get_tmdb_season_query))
         .route("/tmdb/{media_type}/{id}", get(get_tmdb_details_path))
@@ -1521,6 +1522,30 @@ async fn get_douban_poster(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(serde_json::json!({ "data_url": data_url })))
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanSubjectQuery {
+    #[serde(rename = "type")]
+    media_type: String,
+    id: String,
+}
+
+async fn get_douban_subject(
+    State(state): State<MediaApiState>,
+    Query(query): Query<DoubanSubjectQuery>,
+) -> Result<Json<crate::media::douban::DoubanInfo>, ApiError> {
+    let media_type = parse_tmdb_media_type(&query.media_type)?;
+    if query.id.is_empty() || query.id.len() > 20 || !query.id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ApiError::bad_request("invalid douban subject id"));
+    }
+    Ok(Json(
+        state
+            .service
+            .douban_info(media_type, &query.id)
+            .await
+            .map_err(ApiError::from)?,
+    ))
 }
 
 /// 在后台刷新全部猫眼榜单，立即返回；刷新期间读取接口仍返回旧数据。

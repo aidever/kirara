@@ -746,7 +746,7 @@ function formatDate(value: string | null | undefined): string {
 
 function posterUrl(path: string | null | undefined): string | null {
   if (!path) return null;
-  if (/^https?:\/\//i.test(path)) return path;
+  if (/^(https?:\/\/|data:image\/)/i.test(path)) return path;
   return `https://image.tmdb.org/t/p/w342${path.startsWith("/") ? path : `/${path}`}`;
 }
 
@@ -4119,6 +4119,7 @@ type DoubanSubject = {
   rating: number | null;
   poster_id: string | null;
   url: string;
+  media_type: MediaType;
 };
 
 // 豆瓣图片有防盗链，由后端代取；同一张海报在会话内只请求一次。
@@ -4186,6 +4187,195 @@ function formatFetchedAt(value: string | null | undefined) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+type DoubanInfo = {
+  id: string;
+  media_type: MediaType;
+  title: string;
+  original_title: string | null;
+  year: number | null;
+  rating: number | null;
+  rating_count: number | null;
+  intro: string | null;
+  genres: string[];
+  countries: string[];
+  languages: string[];
+  pubdate: string[];
+  durations: string[];
+  episodes_count: number | null;
+  directors: string[];
+  actors: string[];
+  aka: string[];
+  imdb: string | null;
+  poster_id: string | null;
+  url: string;
+};
+
+const TMDB_STATUS_LABELS: Record<string, string> = {
+  "Returning Series": "连载中",
+  "In Production": "制作中",
+  Planned: "计划中",
+  Pilot: "试播",
+  Ended: "已完结",
+  Canceled: "已取消",
+  Released: "已上映",
+  "Post Production": "后期制作",
+  Rumored: "传闻",
+};
+
+function formatCount(value: number) {
+  return value >= 10000 ? `${(value / 10000).toFixed(1).replace(/\.0$/, "")}万` : String(value);
+}
+
+function DetailRow({ label, value }: { label: string; value: string | null | undefined }) {
+  if (!value) return null;
+  return (
+    <div className="flex gap-3 text-sm">
+      <dt className="w-12 shrink-0 text-muted">{label}</dt>
+      <dd className="min-w-0 flex-1">{value}</dd>
+    </div>
+  );
+}
+
+/** 榜单条目详情：豆瓣与 TMDB 各自独立加载，任一失败都不影响另一方的展示。 */
+function MaoyanDetailDialog({
+  item,
+  mediaType,
+  onClose,
+  onSubscribe,
+  onSearchTitle,
+}: {
+  item: MaoyanRankItem | null;
+  mediaType: MediaType;
+  onClose: () => void;
+  onSubscribe: (media: TmdbMedia) => void;
+  onSearchTitle: (title: string, type: MediaType) => void;
+}) {
+  const [douban, setDouban] = useState<DoubanInfo | null>(null);
+  const [doubanError, setDoubanError] = useState("");
+  const [doubanLoading, setDoubanLoading] = useState(false);
+  const [tmdb, setTmdb] = useState<TmdbDetails | null>(null);
+  const [tmdbError, setTmdbError] = useState("");
+  const [tmdbLoading, setTmdbLoading] = useState(false);
+  const doubanId = item?.douban?.id ?? null;
+  const doubanType = item?.douban?.media_type ?? mediaType;
+  const tmdbId = item?.tmdb?.tmdb_id ?? null;
+  const tmdbType = item?.tmdb?.media_type ?? mediaType;
+
+  useEffect(() => {
+    setDouban(null);
+    setDoubanError("");
+    if (!doubanId) return;
+    let active = true;
+    setDoubanLoading(true);
+    api<DoubanInfo>(`/api/media/douban/subject?type=${doubanType}&id=${encodeURIComponent(doubanId)}`)
+      .then((payload) => { if (active) setDouban(payload); })
+      .catch((error) => { if (active) setDoubanError(describeUnknown(error)); })
+      .finally(() => { if (active) setDoubanLoading(false); });
+    return () => { active = false; };
+  }, [doubanId, doubanType]);
+
+  useEffect(() => {
+    setTmdb(null);
+    setTmdbError("");
+    if (!tmdbId) return;
+    let active = true;
+    setTmdbLoading(true);
+    api<TmdbDetails>(`/api/media/tmdb/${tmdbType}/${tmdbId}`)
+      .then((payload) => { if (active) setTmdb(payload); })
+      .catch((error) => { if (active) setTmdbError(describeUnknown(error)); })
+      .finally(() => { if (active) setTmdbLoading(false); });
+    return () => { active = false; };
+  }, [tmdbId, tmdbType]);
+
+  const media = item?.tmdb ?? null;
+  const rating = douban?.rating ?? item?.douban?.rating ?? null;
+  const year = douban?.year ?? item?.douban?.year ?? media?.year ?? null;
+  const meta = [
+    year ? String(year) : null,
+    douban?.countries.join(" / ") || null,
+    (douban?.genres.length ? douban.genres : tmdb?.genres.map((genre) => genre.name) ?? []).join(" / ") || null,
+    douban?.episodes_count ? `${douban.episodes_count} 集` : null,
+    douban?.durations[0] ?? null,
+  ].filter(Boolean).join(" · ");
+  const intro = douban?.intro || tmdb?.overview || media?.overview || "";
+  const loading = (doubanLoading && !douban) || (tmdbLoading && !tmdb);
+  const tmdbStatus = tmdb?.status ? TMDB_STATUS_LABELS[tmdb.status] ?? tmdb.status : null;
+
+  return (
+    <Dialog
+      open={item !== null}
+      onClose={onClose}
+      title={item?.title ?? "详情"}
+      description={[item?.platform, item?.release_info, item?.metric].filter(Boolean).join(" · ") || undefined}
+      panelClassName="max-w-2xl"
+      footer={item ? (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {item.douban ? (
+            <a className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm hover:bg-accent" href={item.douban.url} target="_blank" rel="noreferrer">豆瓣页面</a>
+          ) : null}
+          {media ? (
+            <a className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-sm hover:bg-accent" href={`https://www.themoviedb.org/${media.media_type}/${media.tmdb_id}`} target="_blank" rel="noreferrer">TMDB 页面</a>
+          ) : null}
+          {media ? (
+            <Button onClick={() => { onClose(); onSubscribe(media); }}><Plus data-icon="inline-start" />订阅</Button>
+          ) : (
+            <Button variant="outline" onClick={() => { onClose(); onSearchTitle(item.title, mediaType); }}><Search data-icon="inline-start" />搜索 TMDB</Button>
+          )}
+        </div>
+      ) : undefined}
+    >
+      {item ? (
+        <div className="flex flex-col gap-4 p-4 sm:p-6">
+          <div className="flex gap-4">
+            <div className="w-28 shrink-0"><RankPoster item={item} /></div>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              {douban?.original_title || media?.original_title ? (
+                <p className="text-sm text-muted">{douban?.original_title || media?.original_title}</p>
+              ) : null}
+              {meta ? <p className="text-sm">{meta}</p> : null}
+              {rating ? (
+                <p className="text-sm">
+                  <span className="text-lg font-semibold tabular-nums">{rating.toFixed(1)}</span>
+                  <span className="ml-1 text-muted">豆瓣{douban?.rating_count ? ` · ${formatCount(douban.rating_count)}人评价` : ""}</span>
+                </p>
+              ) : item.douban ? <p className="text-sm text-muted">豆瓣暂无评分</p> : null}
+              {media ? (
+                <p className="text-xs text-muted">
+                  TMDB：{media.title}{media.year ? ` (${media.year})` : ""}
+                  {tmdbStatus ? ` · ${tmdbStatus}` : ""}
+                  {tmdb?.number_of_seasons ? ` · 共 ${tmdb.number_of_seasons} 季` : ""}
+                </p>
+              ) : <p className="text-xs text-muted">未匹配到 TMDB，订阅前需要先手动搜索。</p>}
+            </div>
+          </div>
+          {loading ? (
+            <p role="status" className="flex items-center gap-2 text-sm text-muted">
+              <RefreshCw className="size-4 animate-spin" aria-hidden="true" />正在获取详情
+            </p>
+          ) : null}
+          {douban ? (
+            <dl className="flex flex-col gap-1.5">
+              <DetailRow label="导演" value={douban.directors.join(" / ")} />
+              <DetailRow label="主演" value={douban.actors.join(" / ")} />
+              <DetailRow label="上映" value={douban.pubdate.join(" / ")} />
+              <DetailRow label="语言" value={douban.languages.join(" / ")} />
+              <DetailRow label="又名" value={douban.aka.slice(0, 4).join(" / ")} />
+            </dl>
+          ) : null}
+          {intro ? <p className="whitespace-pre-line text-sm leading-6">{intro}</p> : !loading ? <p className="text-sm text-muted">暂无简介</p> : null}
+          {doubanError || tmdbError ? (
+            <p role="status" className="text-xs text-muted">
+              {doubanError ? `豆瓣详情暂时无法获取：${doubanError}` : ""}
+              {doubanError && tmdbError ? "；" : ""}
+              {tmdbError ? `TMDB 详情暂时无法获取：${tmdbError}` : ""}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </Dialog>
+  );
+}
+
 function MaoyanRankSection({
   onSubscribe,
   onSearchTitle,
@@ -4199,9 +4389,11 @@ function MaoyanRankSection({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [requesting, setRequesting] = useState(false);
+  const [detailItem, setDetailItem] = useState<MaoyanRankItem | null>(null);
   const generation = useRef(0);
   const chartMeta = MAOYAN_CHARTS.find((item) => item.value === chart) ?? MAOYAN_CHARTS[0];
-  const usesPlatform = chart !== "movie";
+  // 票房榜不分平台；网络电影只有腾讯视频的月度分账数据。
+  const usesPlatform = chart !== "movie" && chart !== "web_movie";
   const query = `chart=${chart}&platform=${usesPlatform ? platform : "all"}&limit=20`;
 
   // 读取接口只返回后台快照，不会等待抓取；切换榜单时清空，避免误显示上一个榜单。
@@ -4257,7 +4449,11 @@ function MaoyanRankSection({
           <h3 className="text-sm font-semibold">猫眼榜单</h3>
           <p className="text-xs text-muted">
             看看大家在看什么，点“订阅”即可追更。
-            {data?.show_date ? ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}` : ""}
+            {data?.show_date
+              ? chart === "web_movie"
+                ? ` 腾讯视频 ${data.show_date.replace(/(\d{4})(\d{2})\d{2}/, "$1-$2")} 月分账榜`
+                : ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}`
+              : ""}
             {fetchedAt ? ` · 更新于 ${fetchedAt}` : ""}
           </p>
         </div>
@@ -4294,12 +4490,14 @@ function MaoyanRankSection({
         <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.items.map((item) => (
             <li key={`${item.rank}:${item.title}`} className="flex gap-3 rounded-xl border border-border bg-card p-3">
-              <div className="relative w-16 shrink-0">
+              <button type="button" aria-label={`查看「${item.title}」详情`} className="relative w-16 shrink-0 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={() => setDetailItem(item)}>
                 <RankPoster item={item} />
                 <span className="absolute left-1 top-1 rounded-md bg-background/90 px-1.5 text-xs font-semibold tabular-nums">{item.rank}</span>
-              </div>
+              </button>
               <div className="flex min-w-0 flex-1 flex-col">
-                <h4 className="line-clamp-2 text-sm font-semibold">{item.title}</h4>
+                <h4 className="line-clamp-2 text-sm font-semibold">
+                  <button type="button" className="cursor-pointer text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={() => setDetailItem(item)}>{item.title}</button>
+                </h4>
                 <p className="mt-1 truncate text-xs text-muted">
                   {[item.platform, item.release_info].filter(Boolean).join(" · ") || "\u00a0"}
                 </p>
@@ -4341,6 +4539,13 @@ function MaoyanRankSection({
       ) : (
         <EmptyState icon={Film} title="榜单暂无数据" />
       )}
+      <MaoyanDetailDialog
+        item={detailItem}
+        mediaType={chartMeta.type}
+        onClose={() => setDetailItem(null)}
+        onSubscribe={onSubscribe}
+        onSearchTitle={onSearchTitle}
+      />
     </section>
   );
 }

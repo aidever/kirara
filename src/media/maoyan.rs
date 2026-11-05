@@ -52,10 +52,12 @@ impl MaoyanChart {
         }
     }
 
-    /// 票房榜不区分平台。
+    /// 各榜单可选的平台，第一个为默认。票房榜不区分平台；
+    /// 网络电影分账榜猫眼只持续更新腾讯视频（全网、芒果无效，爱奇艺、优酷已停更）。
     pub fn platforms(self) -> &'static [MaoyanPlatform] {
         match self {
             Self::Movie => &[MaoyanPlatform::All],
+            Self::WebMovie => &[MaoyanPlatform::Tencent],
             _ => &MaoyanPlatform::ALL,
         }
     }
@@ -167,6 +169,8 @@ pub enum MaoyanError {
     Parse(String),
     #[error("{0}")]
     Browser(String),
+    #[error("猫眼暂无该榜单的数据")]
+    NoData,
 }
 
 /// 接口返回的榜单视图：数据来自后台刷新的快照，刷新期间仍返回上一次的数据。
@@ -196,6 +200,7 @@ pub struct MaoyanStore {
     last_attempt: Mutex<Option<Instant>>,
     match_cache: Mutex<HashMap<(String, &'static str), (Instant, MediaMatch)>>,
     posters: Mutex<std::collections::VecDeque<(String, String)>>,
+    infos: Mutex<HashMap<String, (Instant, super::douban::DoubanInfo)>>,
 }
 
 /// 刷新标志的 RAII 守卫：刷新任务结束（包括被取消）时自动清除。
@@ -315,6 +320,23 @@ impl MaoyanStore {
         matches
     }
 
+    pub async fn cached_info(&self, key: &str) -> Option<super::douban::DoubanInfo> {
+        let infos = self.infos.lock().await;
+        infos
+            .get(key)
+            .filter(|(stored, _)| stored.elapsed() < Duration::from_secs(6 * 60 * 60))
+            .map(|(_, info)| info.clone())
+    }
+
+    pub async fn store_info(&self, key: String, info: super::douban::DoubanInfo) {
+        let mut infos = self.infos.lock().await;
+        infos.retain(|_, (stored, _)| stored.elapsed() < Duration::from_secs(6 * 60 * 60));
+        if infos.len() >= 300 {
+            infos.clear();
+        }
+        infos.insert(key, (Instant::now(), info));
+    }
+
     pub async fn cached_poster(&self, id: &str) -> Option<String> {
         let posters = self.posters.lock().await;
         posters.iter().find(|(key, _)| key == id).map(|(_, value)| value.clone())
@@ -352,9 +374,11 @@ pub fn show_date() -> String {
 pub fn chart_url(chart: MaoyanChart, platform: MaoyanPlatform, show_date: &str) -> String {
     match chart {
         MaoyanChart::Movie => format!("{MAOYAN_BASE}/dashboard-ajax/movie"),
+        // 网络电影只有分账榜：按月统计（dateType=2，日期取当月 1 日），日榜通常只有一两部。
         MaoyanChart::WebMovie => format!(
-            "{MAOYAN_BASE}/i/api/encrypt/dashboard/webHeatNetData?showDate={show_date}&platformType={}&dateType=0&rankType=0",
-            platform.code().unwrap_or(0)
+            "{MAOYAN_BASE}/i/api/encrypt/dashboard/webHeatNetData?showDate={}01&platformType={}&dateType=2&rankType=0",
+            show_date.get(..6).unwrap_or(show_date),
+            platform.code().unwrap_or(3)
         ),
         _ => {
             let mut url = format!(
@@ -424,7 +448,9 @@ pub fn latest_available_date(payload: &Value) -> Option<String> {
         .pointer("/calendarNet/selectMaxDate")
         .and_then(Value::as_str)?
         .replace('-', "");
-    (latest.len() == 8 && latest.bytes().all(|byte| byte.is_ascii_digit())).then_some(latest)
+    // 无效平台会给出未来的日期，重试也拿不到数据。
+    (latest.len() == 8 && latest.bytes().all(|byte| byte.is_ascii_digit()) && latest <= show_date())
+        .then_some(latest)
 }
 
 fn text(value: Option<&Value>) -> Option<String> {
@@ -458,6 +484,23 @@ fn number(value: Option<&Value>) -> Option<f64> {
     .filter(|value| value.is_finite() && *value > 0.0)
 }
 
+fn format_yuan(value: f64) -> String {
+    let trim = |text: String| {
+        if text.contains('.') {
+            text.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            text
+        }
+    };
+    if value >= 100_000_000.0 {
+        format!("{}亿", trim(format!("{:.2}", value / 100_000_000.0)))
+    } else if value >= 10_000.0 {
+        format!("{}万", trim(format!("{:.1}", value / 10_000.0)))
+    } else {
+        format!("{}元", value.round())
+    }
+}
+
 /// 热度优先取数值字段（不受字体混淆影响），其次才用可读的展示文本。
 fn heat_value(entry: &Value) -> Option<String> {
     ["currHeat", "barValue", "heat"]
@@ -478,6 +521,9 @@ pub fn parse_chart(
         MaoyanChart::WebMovie => ("dataList", None, "movieName"),
         _ => ("dataList", Some("seriesInfo"), "name"),
     };
+    if payload.get("status").and_then(Value::as_bool) == Some(false) {
+        return Err(MaoyanError::NoData);
+    }
     let list = payload
         .get(list_key)
         .and_then(|container| container.get("list"))
@@ -501,6 +547,9 @@ pub fn parse_chart(
         let metric = match chart {
             MaoyanChart::Movie => readable_text(entry.get("sumBoxDesc"))
                 .map(|value| format!("累计 {value}")),
+            // 分账展示文字被字体混淆（如 ".万"），数值字段单位为元。
+            MaoyanChart::WebMovie => number(entry.get("splitBox"))
+                .map(|value| format!("当月分账 {}", format_yuan(value))),
             _ => heat_value(entry).map(|value| format!("热度 {value}")),
         };
         items.push(MaoyanRankItem {
@@ -739,7 +788,22 @@ mod tests {
         assert_eq!(items[0].platform.as_deref(), Some("腾讯视频"));
         assert_eq!(items[0].metric.as_deref(), Some("热度 8523.6"));
 
-        assert!(parse_chart(MaoyanChart::Tv, &json!({"status": false}), 5).is_err());
+        assert!(matches!(parse_chart(MaoyanChart::Tv, &json!({"status": false}), 5), Err(MaoyanError::NoData)));
+
+        // 真实返回：currHeat 为混淆后的 "."，热度在 barValue；网络电影分账在 splitBox（万元）。
+        let tv = json!({"status": true, "dataList": {"list": [
+            {"barValue": 6517.03, "currHeat": ".", "currHeatDesc": ".", "seriesInfo": {"name": "小城良方", "platformDesc": "爱奇艺独播", "releaseInfo": "上线16天"}}
+        ]}});
+        assert_eq!(parse_chart(MaoyanChart::Tv, &tv, 5).unwrap()[0].metric.as_deref(), Some("热度 6517.03"));
+        let web = json!({"status": true, "dataList": {"list": [
+            {"movieName": "僵尸参将2", "releaseInfo": "上映30天", "splitBox": 42900000, "splitBoxDesc": ".万"},
+            {"movieName": "大片", "splitBox": 123456789.0},
+            {"movieName": "小片", "splitBox": 5500}
+        ]}});
+        let items = parse_chart(MaoyanChart::WebMovie, &web, 5).unwrap();
+        assert_eq!(items[0].metric.as_deref(), Some("当月分账 4290万"));
+        assert_eq!(items[1].metric.as_deref(), Some("当月分账 1.23亿"));
+        assert_eq!(items[2].metric.as_deref(), Some("当月分账 5500元"));
 
         // 展示字段被字体混淆时改用数值字段；都不可用时不展示热度。
         let obfuscated = json!({"dataList": {"list": [
@@ -757,6 +821,11 @@ mod tests {
             chart_url(MaoyanChart::WebSeries, MaoyanPlatform::Tencent, "20261105"),
             "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=1&showDate=20261105&platformType=3"
         );
+        assert_eq!(
+            chart_url(MaoyanChart::WebMovie, MaoyanPlatform::Tencent, "20261105"),
+            "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatNetData?showDate=20261101&platformType=3&dateType=2&rankType=0"
+        );
+        assert!(latest_available_date(&json!({"status": false, "calendarNet": {"selectMaxDate": "2999-11-20"}})).is_none());
         assert_eq!(
             chart_url(MaoyanChart::Variety, MaoyanPlatform::All, "20261105"),
             "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=2&showDate=20261105"
@@ -817,8 +886,45 @@ mod tests {
         assert_eq!(tmdb_query_title("庆余年 第二季"), "庆余年");
         assert_eq!(tmdb_query_title("第一炉香"), "第一炉香");
         assert_eq!(
-            latest_available_date(&json!({"status": false, "calendarNet": {"selectMaxDate": "2026-11-04"}})),
-            Some("20261104".to_string())
+            latest_available_date(&json!({"status": false, "calendarNet": {"selectMaxDate": "2020-11-04"}})),
+            Some("20201104".to_string())
         );
+    }
+
+    /// 用真实云浏览器抓取热度榜原始数据，便于排查格式变化：
+    /// `MAOYAN_LIGHTPANDA_SECRETS=path MAOYAN_DUMP_DIR=dir cargo test --lib maoyan::tests::live_dump -- --ignored`
+    #[tokio::test]
+    #[ignore]
+    async fn live_dump() {
+        let secrets: Value = serde_json::from_str(
+            &std::fs::read_to_string(std::env::var("MAOYAN_LIGHTPANDA_SECRETS").unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut settings = crate::config::GlobalConfig::default();
+        settings.lightpanda.endpoint = secrets["endpoint"].as_str().map(str::to_string);
+        settings.lightpanda.token = secrets["token"].as_str().map(str::to_string);
+        let dir = std::path::PathBuf::from(std::env::var("MAOYAN_DUMP_DIR").unwrap());
+        let date = show_date();
+        let keys = [
+            (MaoyanChart::Tv, MaoyanPlatform::All),
+            (MaoyanChart::WebMovie, MaoyanPlatform::All),
+            (MaoyanChart::WebMovie, MaoyanPlatform::Tencent),
+        ];
+        let mut urls: Vec<String> = keys.iter().map(|(chart, platform)| chart_url(*chart, *platform, &date)).collect();
+        let mut names: Vec<String> = keys.iter().map(|(chart, platform)| format!("{}-{}.json", chart.as_str(), platform.as_str())).collect();
+        if let Ok(extra) = std::env::var("MAOYAN_EXTRA_URLS") {
+            for (index, url) in extra.split_whitespace().enumerate() {
+                urls.push(url.to_string());
+                names.push(format!("extra-{index}.json"));
+            }
+        }
+        let results = fetch_chart_payloads_in_browser(&settings, &urls).await.unwrap();
+        for (name, result) in names.into_iter().zip(results) {
+            let body = match result {
+                Ok(value) => serde_json::to_string_pretty(&value).unwrap(),
+                Err(error) => format!("ERROR {error}"),
+            };
+            std::fs::write(dir.join(name), body).unwrap();
+        }
     }
 }

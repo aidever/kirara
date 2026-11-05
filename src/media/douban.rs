@@ -48,7 +48,7 @@ async fn frodo_blocked() -> bool {
 
 async fn block_frodo() {
     *FRODO_BLOCKED_UNTIL.lock().await = Some(Instant::now() + FRODO_COOLDOWN);
-    tracing::warn!("douban frodo API is rate limited; falling back to web suggest for an hour");
+    tracing::warn!("douban frodo search is rate limited; falling back to web suggest for an hour");
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -82,6 +82,31 @@ pub struct DoubanDetail {
     pub original_title: Option<String>,
     pub aka: Vec<String>,
     pub imdb: Option<String>,
+}
+
+/// 详情弹窗展示用的豆瓣条目信息。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DoubanInfo {
+    pub id: String,
+    pub media_type: TmdbMediaType,
+    pub title: String,
+    pub original_title: Option<String>,
+    pub year: Option<u32>,
+    pub rating: Option<f64>,
+    pub rating_count: Option<u64>,
+    pub intro: Option<String>,
+    pub genres: Vec<String>,
+    pub countries: Vec<String>,
+    pub languages: Vec<String>,
+    pub pubdate: Vec<String>,
+    pub durations: Vec<String>,
+    pub episodes_count: Option<u32>,
+    pub directors: Vec<String>,
+    pub actors: Vec<String>,
+    pub aka: Vec<String>,
+    pub imdb: Option<String>,
+    pub poster_id: Option<String>,
+    pub url: String,
 }
 
 #[derive(Clone)]
@@ -275,6 +300,62 @@ pub fn parse_suggest(payload: &Value) -> Vec<DoubanSubject> {
         .collect()
 }
 
+fn strings(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(|value| string(Some(value))).collect())
+        .unwrap_or_default()
+}
+
+fn names(value: Option<&Value>, limit: usize) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| string(value.get("name")))
+                .take(limit)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn parse_info(payload: &Value, media_type: TmdbMediaType, id: &str) -> Option<DoubanInfo> {
+    let title = string(payload.get("title"))?;
+    let detail = parse_detail(payload);
+    Some(DoubanInfo {
+        id: id.to_string(),
+        media_type,
+        original_title: detail.original_title.filter(|original| original != &title),
+        title,
+        year: parse_year(payload.get("year")),
+        rating: payload
+            .pointer("/rating/value")
+            .and_then(Value::as_f64)
+            .filter(|value| *value > 0.0),
+        rating_count: payload.pointer("/rating/count").and_then(Value::as_u64),
+        intro: string(payload.get("intro")),
+        genres: strings(payload.get("genres")),
+        countries: strings(payload.get("countries")),
+        languages: strings(payload.get("languages")),
+        pubdate: strings(payload.get("pubdate")),
+        durations: strings(payload.get("durations")),
+        episodes_count: payload
+            .get("episodes_count")
+            .and_then(Value::as_u64)
+            .filter(|count| *count > 0)
+            .map(|count| count as u32),
+        directors: names(payload.get("directors"), 5),
+        actors: names(payload.get("actors"), 12),
+        aka: detail.aka,
+        imdb: detail.imdb,
+        poster_id: string(payload.pointer("/pic/normal"))
+            .or_else(|| string(payload.pointer("/pic/large")))
+            .and_then(|url| poster_id(&url)),
+        url: format!("https://movie.douban.com/subject/{id}/"),
+    })
+}
+
 pub fn parse_detail(payload: &Value) -> DoubanDetail {
     DoubanDetail {
         original_title: string(payload.get("original_title")),
@@ -298,7 +379,9 @@ impl DoubanClient {
     }
 
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, DoubanError> {
-        if frodo_blocked().await {
+        // 豆瓣的频率限制只针对搜索，条目详情通常仍可访问，因此冷却只作用于搜索。
+        let is_search = path.starts_with("/search");
+        if is_search && frodo_blocked().await {
             return Err(DoubanError::RateLimited);
         }
         let full_path = format!("{FRODO_PATH_PREFIX}{path}");
@@ -338,7 +421,9 @@ impl DoubanClient {
                     let status = response.status();
                     if matches!(status.as_u16(), 403 | 429) {
                         // need_login / 频率限制：重试只会延长封禁。
-                        block_frodo().await;
+                        if is_search {
+                            block_frodo().await;
+                        }
                         return Err(DoubanError::RateLimited);
                     }
                     if !status.is_server_error() || attempt >= DOUBAN_MAX_ATTEMPTS {
@@ -372,7 +457,12 @@ impl DoubanClient {
             Ok(payload) => Ok(parse_search(&payload)),
             Err(error) => {
                 tracing::debug!(%error, query, "douban frodo search failed, trying web suggest");
-                self.suggest(query).await
+                // 联想接口被限流时返回空数组（HTTP 200），无法与“确实没有”区分；
+                // 按失败处理，避免把限流结果当作“豆瓣未收录”缓存下来。
+                match self.suggest(query).await? {
+                    subjects if subjects.is_empty() => Err(DoubanError::RateLimited),
+                    subjects => Ok(subjects),
+                }
             }
         }
     }
@@ -406,6 +496,16 @@ impl DoubanClient {
             .await
             .map_err(|error| DoubanError::Parse(error.to_string()))?;
         Ok(parse_suggest(&payload))
+    }
+
+    /// 完整条目信息（详情弹窗用）。
+    pub async fn info(&self, media_type: TmdbMediaType, id: &str) -> Result<DoubanInfo, DoubanError> {
+        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(DoubanError::Parse("invalid subject id".to_string()));
+        }
+        let payload = self.get(&format!("/{}/{id}", media_type.as_str()), &[]).await?;
+        parse_info(&payload, media_type, id)
+            .ok_or_else(|| DoubanError::Parse("缺少标题".to_string()))
     }
 
     pub async fn detail(&self, subject: &DoubanSubject) -> Result<DoubanDetail, DoubanError> {
@@ -468,6 +568,20 @@ mod tests {
         assert_eq!(suggest[1].media_type, TmdbMediaType::Movie);
         assert_eq!(suggest[1].poster_id, None);
 
+        let info = parse_info(&json!({
+            "title": "小城良方", "original_title": "", "year": "2026",
+            "intro": "简介", "genres": ["剧情"], "countries": ["中国大陆"], "pubdate": ["2026-10-21(中国大陆)"],
+            "durations": ["45分钟"], "episodes_count": 29,
+            "directors": [{"name": "张晓波"}], "actors": [{"name": "肖战"}, {"name": "倪大红"}],
+            "rating": {"count": 284013, "value": 8.0},
+            "pic": {"normal": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2936709341.webp"}
+        }), TmdbMediaType::Tv, "36675942").unwrap();
+        assert_eq!(info.original_title, None);
+        assert_eq!(info.episodes_count, Some(29));
+        assert_eq!(info.actors, vec!["肖战".to_string(), "倪大红".to_string()]);
+        assert_eq!(info.rating_count, Some(284013));
+        assert_eq!(info.poster_id.as_deref(), Some("p2936709341"));
+
         let detail = parse_detail(&json!({"original_title": "", "aka": ["刘医生返乡记", " "], "imdb": "tt1234567"}));
         assert_eq!(detail.original_title, None);
         assert_eq!(detail.aka, vec!["刘医生返乡记".to_string()]);
@@ -479,19 +593,52 @@ mod tests {
     #[ignore]
     async fn live_search_and_detail() {
         let client = DoubanClient::new(Client::new());
-        let subjects = client.search("小城良方").await.expect("search");
-        let subject = crate::media::maoyan::pick_douban("小城良方", &TmdbMediaType::Tv, subjects)
-            .expect("matched");
-        assert_eq!(subject.year, Some(2026));
+        let subject = match client.search("小城良方").await {
+            Ok(subjects) => {
+                let subject = crate::media::maoyan::pick_douban("小城良方", &TmdbMediaType::Tv, subjects)
+                    .expect("matched");
+                assert_eq!(subject.year, Some(2026));
+                subject
+            }
+            Err(DoubanError::RateLimited) => {
+                eprintln!("douban search is rate limited; using a known subject");
+                DoubanSubject {
+                    id: "36675942".to_string(),
+                    title: "小城良方".to_string(),
+                    year: Some(2026),
+                    rating: None,
+                    poster_id: Some("p2936709341".to_string()),
+                    url: String::new(),
+                    media_type: TmdbMediaType::Tv,
+                }
+            }
+            Err(error) => panic!("search: {error}"),
+        };
         match client.detail(&subject).await {
             Ok(detail) => assert!(detail.aka.iter().any(|name| name == "刘医生返乡记"), "{detail:?}"),
             Err(DoubanError::RateLimited) => eprintln!("frodo is rate limited; detail skipped"),
             Err(error) => panic!("detail: {error}"),
         }
+        match client.info(TmdbMediaType::Tv, "36675942").await {
+            Ok(info) => {
+                assert_eq!(info.title, "小城良方");
+                assert!(info.intro.is_some() && !info.actors.is_empty(), "{info:?}");
+            }
+            Err(DoubanError::RateLimited) => eprintln!("frodo is rate limited; info skipped"),
+            Err(error) => panic!("info: {error}"),
+        }
+        // 当前 IP 被限流时联想接口返回空数组，此时只打印提示。
         let suggested = client.suggest("空枪").await.expect("suggest");
-        assert!(crate::media::maoyan::pick_douban("空枪", &TmdbMediaType::Movie, suggested).is_some());
-        let movie = client.search("生化危机：爆发夜").await.expect("movie search");
-        assert!(crate::media::maoyan::pick_douban("生化危机：爆发夜", &TmdbMediaType::Movie, movie).is_some());
+        if suggested.is_empty() {
+            eprintln!("web suggest returned nothing (likely throttled)");
+        } else {
+            assert!(crate::media::maoyan::pick_douban("空枪", &TmdbMediaType::Movie, suggested).is_some());
+        }
+        match client.search("生化危机：爆发夜").await {
+            Ok(movie) => assert!(crate::media::maoyan::pick_douban("生化危机：爆发夜", &TmdbMediaType::Movie, movie).is_some()),
+            Err(DoubanError::RateLimited) => eprintln!("douban search is rate limited"),
+            Err(error) => panic!("movie search: {error}"),
+        }
         let poster = fetch_poster(&Client::new(), subject.poster_id.as_deref().expect("poster id"))
             .await
             .expect("poster");

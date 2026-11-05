@@ -276,7 +276,7 @@ impl MediaService {
         let platform = if chart.platforms().contains(&platform) {
             platform
         } else {
-            MaoyanPlatform::All
+            chart.platforms()[0]
         };
         let limit = limit.clamp(1, maoyan::MAOYAN_MAX_LIMIT);
         let mut view = self.maoyan.view(chart, platform, limit).await;
@@ -311,6 +311,26 @@ impl MediaService {
                 tokio::time::sleep(StdDuration::from_secs(5 * 60)).await;
             }
         });
+    }
+
+    /// 豆瓣条目详情（缓存 6 小时）。
+    pub async fn douban_info(
+        &self,
+        media_type: TmdbMediaType,
+        id: &str,
+    ) -> Result<super::douban::DoubanInfo, MediaServiceError> {
+        let key = format!("{}:{id}", media_type.as_str());
+        if let Some(cached) = self.maoyan.cached_info(&key).await {
+            return Ok(cached);
+        }
+        let settings = self.db.get_settings().await?;
+        let client = client_factory::build_client(settings.proxy.as_deref())?;
+        let info = super::douban::DoubanClient::new(client)
+            .info(media_type, id)
+            .await
+            .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
+        self.maoyan.store_info(key, info.clone()).await;
+        Ok(info)
     }
 
     /// 豆瓣海报（data URL），内存缓存最近 300 张。
