@@ -1,6 +1,6 @@
 [package]
 name = "kirara-desktop"
-version = "2.6.2"
+version = "2.7.0"
 edition = "2024"
 description = "Kirara desktop application"
 default-run = "kirara-desktop"
