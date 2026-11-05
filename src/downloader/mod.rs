@@ -276,6 +276,15 @@ pub trait DownloaderClient: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<TorrentFileInfo>, String>> + Send + '_>> {
         Box::pin(async { Err("当前下载器不支持读取种子文件清单".to_string()) })
     }
+
+    /// 将种子中指定路径的文件设为“不下载”
+    fn skip_torrent_files<'a>(
+        &'a self,
+        _hash: &'a str,
+        _paths: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async { Err("当前下载器不支持跳过种子文件".to_string()) })
+    }
 }
 
 pub fn calculate_pending_download_bytes(torrents: &[TorrentInfo]) -> u64 {

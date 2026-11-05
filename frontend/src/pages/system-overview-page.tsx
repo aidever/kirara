@@ -97,63 +97,66 @@ function SourceToggle({
   );
 }
 
-/* ---------- circular gauge ---------- */
+/* ---------- first-run checklist ---------- */
 
-function Gauge({
-  value,
-  size = 120,
-  strokeWidth = 10,
-  color,
-  label,
-  sub,
-  pending = false,
-}: {
-  value: number;
-  size?: number;
-  strokeWidth?: number;
-  color: string;
-  label: string;
-  sub?: string;
-  pending?: boolean;
-}) {
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const clamped = Math.min(100, Math.max(0, value));
-  const offset = circumference - (clamped / 100) * circumference;
+type SetupStep = { key: string; label: string; detail: string; href: string; ready: boolean };
 
+/** 首次使用时告诉用户下一步做什么；全部完成后自动隐藏。读取失败时不显示，避免误报。 */
+function SetupChecklist() {
+  const [steps, setSteps] = useState<SetupStep[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api<unknown[]>("/api/sites"),
+      api<unknown[]>("/api/downloaders"),
+      api<{ tmdb_token_configured?: boolean }>("/api/media/settings"),
+    ])
+      .then(([sites, downloaders, media]) => {
+        if (cancelled) return;
+        setSteps([
+          { key: "sites", label: "添加 PT 站点", detail: "填写 Cookie 或导入 PTD 备份", href: "#/sites", ready: Array.isArray(sites) && sites.length > 0 },
+          { key: "downloaders", label: "连接 qBittorrent", detail: "订阅、RSS 和刷流都通过它下载", href: "#/downloaders", ready: Array.isArray(downloaders) && downloaders.length > 0 },
+          { key: "tmdb", label: "填写 TMDB 密钥", detail: "自动追剧用它识别影视", href: "#/media?mode=settings&section=media", ready: Boolean(media?.tmdb_token_configured) },
+        ]);
+      })
+      .catch(() => {
+        if (!cancelled) setSteps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!steps || steps.every((step) => step.ready)) return null;
+  const done = steps.filter((step) => step.ready).length;
   return (
-    <div className="flex flex-col items-center gap-2" role="img" aria-label={pending ? `${label}：暂无数据` : `${label}：${clamped.toFixed(1)}%${sub ? `，${sub}` : ""}`}>
-      <svg width={size} height={size} className="-rotate-90" aria-hidden="true">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={strokeWidth}
-          className="text-border"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          className="transition-all duration-700 ease-out"
-        />
-      </svg>
-      <div className="absolute flex flex-col items-center justify-center" style={{ width: size, height: size }} aria-hidden="true">
-        <span className="text-2xl font-black tracking-tight tabular-nums" style={{ color }}>
-          {pending ? "—" : `${clamped.toFixed(1)}%`}
-        </span>
-        {sub ? <span className="text-[10px] text-muted mt-0.5">{sub}</span> : null}
+    <section aria-labelledby="setup-checklist-title" className="rounded-2xl border border-primary/25 bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 id="setup-checklist-title" className="text-base font-semibold">开始使用云母</h3>
+        <span className="text-xs tabular-nums text-muted">已完成 {done} / {steps.length}</span>
       </div>
-      <span className="text-xs font-semibold text-muted" aria-hidden="true">{label}</span>
-    </div>
+      <ol className="mt-3 grid gap-2 sm:grid-cols-3">
+        {steps.map((step, index) => (
+          <li key={step.key}>
+            {step.ready ? (
+              <div className="flex min-h-14 items-center gap-3 rounded-xl border border-border px-3 py-2 text-sm text-muted">
+                <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">✓</span>
+                <span>{step.label}<span className="sr-only">（已完成）</span></span>
+              </div>
+            ) : (
+              <a href={step.href} className="flex min-h-14 items-center gap-3 rounded-xl border border-border px-3 py-2 text-sm transition-colors hover:border-primary/40 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+                <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">{index + 1}</span>
+                <span className="min-w-0">
+                  <span className="block font-semibold text-foreground">{step.label}</span>
+                  <span className="block truncate text-xs text-muted">{step.detail}</span>
+                </span>
+              </a>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -294,6 +297,7 @@ export function SystemOverviewPage() {
           {snapshot ? "暂时无法刷新系统指标，下面显示的是上一次获取的数据。" : "暂时无法获取系统指标，稍后会自动重试。"}
         </Notice>
       ) : null}
+      <SetupChecklist />
       {/* 实时指标卡片 */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <MetricCard
@@ -325,58 +329,6 @@ export function SystemOverviewPage() {
           color={memColor}
         />
       </div>
-
-      {/* 仪表盘 */}
-      <Card className="bg-card">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Activity className="h-4 w-4 text-primary" />
-            实时仪表盘
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center justify-center gap-8 py-6 sm:gap-12">
-          <div className="relative">
-            <Gauge
-              value={snapshot?.process_cpu_usage ?? 0}
-              color="#7450a3"
-              label="进程 CPU"
-              pending={!snapshot}
-              sub={snapshot ? `${snapshot.process_cpu_usage.toFixed(1)}%` : undefined}
-            />
-          </div>
-          <div className="relative">
-            <Gauge
-              value={snapshot?.system_cpu_usage ?? 0}
-              size={140}
-              strokeWidth={12}
-              color="#397968"
-              label="系统 CPU"
-              pending={!snapshot}
-              sub={snapshot ? `${snapshot.system_cpu_usage.toFixed(1)}%` : undefined}
-            />
-          </div>
-          <div className="relative">
-            <Gauge
-              value={processMemMb / (sysTotalGb * 1024 || 1) * 100}
-              color="#99651d"
-              label="进程内存"
-              pending={!snapshot}
-              sub={snapshot ? `${processMemMb.toFixed(0)} MB` : undefined}
-            />
-          </div>
-          <div className="relative">
-            <Gauge
-              value={sysMemPercent}
-              size={140}
-              strokeWidth={12}
-              color={memColor}
-              label="系统内存"
-              pending={!snapshot}
-              sub={snapshot ? `${sysUsedGb.toFixed(1)} / ${sysTotalGb.toFixed(1)} GB` : undefined}
-            />
-          </div>
-        </CardContent>
-      </Card>
 
       {/* 历史趋势 */}
       <Card className="bg-card">

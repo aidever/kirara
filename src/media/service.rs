@@ -4,7 +4,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::{Instrument, warn};
+use tracing::{Instrument, info, warn};
 
 use crate::db::Database;
 use crate::downloader::{AddTorrentOptions, DownloaderClient, DownloaderClientPool};
@@ -19,6 +19,7 @@ use super::domain::{
     ReleaseInfo, ReleaseParser, SearchCriteria, SeasonEpisode, SortKey, stable_release_key,
 };
 use super::lease::process_owner_id;
+use super::maoyan::{self, MaoyanCache, MaoyanChart, MaoyanPlatform, MaoyanRankResponse};
 use super::models::{
     MEDIA_DOWNLOAD_RECONCILIATION_GRACE_SECONDS, MediaDownloadCoverage, MediaDownloadDeleteOutcome,
     MediaDownloadDeletion, MediaDownloadRecord, NewMediaDownload, NewSubscription,
@@ -62,6 +63,8 @@ pub enum MediaServiceError {
     Serialization(String),
     #[error("downloader error: {0}")]
     Downloader(String),
+    #[error("{0}")]
+    Upstream(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +160,7 @@ pub struct MediaService {
     downloaders: Arc<DownloaderClientPool>,
     parser: ReleaseParser,
     candidate_cache: Arc<tokio::sync::Mutex<CandidateCache>>,
+    maoyan_cache: Arc<MaoyanCache>,
 }
 
 #[derive(Clone)]
@@ -238,7 +242,70 @@ impl MediaService {
             downloaders,
             parser: ReleaseParser::default(),
             candidate_cache: Arc::new(tokio::sync::Mutex::new(CandidateCache::default())),
+            maoyan_cache: Arc::new(MaoyanCache::default()),
         })
+    }
+
+    /// 猫眼榜单（带 30 分钟缓存），并为每个条目匹配 TMDB，便于直接订阅。
+    pub async fn maoyan_rank(
+        &self,
+        chart: MaoyanChart,
+        platform: MaoyanPlatform,
+        limit: usize,
+        refresh: bool,
+    ) -> Result<MaoyanRankResponse, MediaServiceError> {
+        let limit = limit.clamp(1, maoyan::MAOYAN_MAX_LIMIT);
+        if !refresh
+            && let Some(mut cached) = self.maoyan_cache.get(chart, platform).await
+            && cached.items.len() >= limit
+        {
+            cached.items.truncate(limit);
+            return Ok(cached);
+        }
+        let settings = self.db.get_settings().await?;
+        let http = client_factory::build_client(settings.proxy.as_deref())?;
+        let mut show_date = maoyan::show_date();
+        let mut payload = maoyan::fetch_chart_payload(
+            &http,
+            &settings,
+            chart,
+            &maoyan::chart_url(chart, platform, &show_date),
+        )
+        .await
+        .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
+        if let Some(latest) = maoyan::latest_available_date(&payload)
+            && latest != show_date
+        {
+            show_date = latest;
+            payload = maoyan::fetch_chart_payload(
+                &http,
+                &settings,
+                chart,
+                &maoyan::chart_url(chart, platform, &show_date),
+            )
+            .await
+            .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
+        }
+        let mut items = maoyan::parse_chart(chart, &payload, maoyan::MAOYAN_MAX_LIMIT)
+            .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
+        if let Ok(client) = self.tmdb_client().await {
+            maoyan::attach_tmdb(&mut items, chart.media_type(), |query, media_type| {
+                let client = client.clone();
+                async move { client.search(&query, Some(media_type.as_str())).await.ok() }
+            })
+            .await;
+        }
+        let response = MaoyanRankResponse {
+            chart,
+            platform,
+            show_date,
+            fetched_at: Utc::now().to_rfc3339(),
+            items,
+        };
+        self.maoyan_cache.put(response.clone()).await;
+        let mut response = response;
+        response.items.truncate(limit);
+        Ok(response)
     }
 
     pub fn database(&self) -> &Database {
@@ -843,6 +910,8 @@ impl MediaService {
                 &profile,
             )
             .await?;
+        let unwanted = self.subscription_unwanted_episodes(&subscription).await?;
+        apply_redundant_episode_ranking(&mut search.candidates, &unwanted);
         let accepted_count = search
             .candidates
             .iter()
@@ -955,6 +1024,91 @@ impl MediaService {
             download,
             site_errors: search.errors,
         })
+    }
+
+    /// Episodes of the current season that a multi-episode pack should not bring in again:
+    /// everything already submitted plus everything before the configured start episode.
+    async fn subscription_unwanted_episodes(
+        &self,
+        subscription: &SubscriptionRecord,
+    ) -> Result<UnwantedEpisodes, MediaServiceError> {
+        if subscription.media_type == "movie" {
+            return Ok(UnwantedEpisodes::default());
+        }
+        let owned = self
+            .db
+            .list_subscription_submitted_episodes(subscription.id, subscription.season)
+            .await?;
+        Ok(UnwantedEpisodes {
+            season: subscription.season,
+            episodes: owned.episodes.into_iter().collect(),
+            absolute_episodes: owned.absolute_episodes.into_iter().collect(),
+            episodes_before: subscription.start_episode.unwrap_or(1),
+            absolute_before: subscription_absolute_anchor(subscription)
+                .ok()
+                .flatten()
+                .unwrap_or(1),
+        })
+    }
+
+    /// After a multi-episode pack was added, stop qBittorrent from downloading the files of
+    /// episodes that the subscription already owns. Best effort: a failure only logs.
+    async fn skip_unwanted_pack_files(
+        &self,
+        client: &dyn DownloaderClient,
+        download: &MediaDownloadRecord,
+        coverage: &MediaDownloadCoverage,
+        infohash: &str,
+    ) {
+        if coverage.episodes.len() <= 1 && coverage.absolute_episodes.len() <= 1 {
+            return;
+        }
+        let Some(subscription_id) = download.subscription_id else {
+            return;
+        };
+        let subscription = match self.db.get_subscription(subscription_id).await {
+            Ok(Some(subscription)) => subscription,
+            _ => return,
+        };
+        let unwanted = match self.subscription_unwanted_episodes(&subscription).await {
+            Ok(unwanted) => unwanted,
+            Err(error) => {
+                warn!(download_id = download.id, %error, "could not load owned episodes");
+                return;
+            }
+        };
+        let files = match client.get_torrent_files(infohash).await {
+            Ok(files) => files,
+            Err(error) => {
+                warn!(download_id = download.id, %error, "could not list pack files");
+                return;
+            }
+        };
+        let skipped: Vec<String> = files
+            .iter()
+            .filter(|file| {
+                let name = file.path.rsplit(['/', '\\']).next().unwrap_or(&file.path);
+                self.parser
+                    .parse(name)
+                    .is_ok_and(|release| unwanted.covers_all(&release))
+            })
+            .map(|file| file.path.clone())
+            .collect();
+        if skipped.is_empty() || skipped.len() == files.len() {
+            return;
+        }
+        match client.skip_torrent_files(infohash, &skipped).await {
+            Ok(()) => info!(
+                download_id = download.id,
+                skipped = skipped.len(),
+                "skipped already-owned episode files in a multi-episode pack"
+            ),
+            Err(error) => warn!(
+                download_id = download.id,
+                %error,
+                "could not skip already-owned episode files"
+            ),
+        }
     }
 
     async fn save_claimed_run_snapshot(
@@ -1910,6 +2064,8 @@ impl MediaService {
             .await
         {
             Ok(()) => {
+                self.skip_unwanted_pack_files(client.as_ref(), &submitting, &coverage, &infohash)
+                    .await;
                 if !self
                     .db
                     .mark_media_download_submitted(
@@ -2139,21 +2295,39 @@ fn media_download_coverage(
     if download.subscription_id.is_none() {
         return MediaDownloadCoverage::default();
     }
-    let accepted = serde_json::from_str::<serde_json::Value>(&download.decision_json)
+    let identity_confirmed = serde_json::from_str::<serde_json::Value>(&download.decision_json)
         .ok()
-        .and_then(|decision| {
-            decision
-                .get("accepted")
-                .and_then(serde_json::Value::as_bool)
-                .or_else(|| {
-                    decision
-                        .get("decision")
-                        .and_then(|value| value.get("accepted"))
-                        .and_then(serde_json::Value::as_bool)
-                })
+        .and_then(|value| {
+            let decision = if value.get("accepted").is_some() {
+                value
+            } else {
+                value.get("decision")?.clone()
+            };
+            let accepted = decision.get("accepted")?.as_bool()?;
+            if accepted {
+                return Some(true);
+            }
+            // An operator override of a quality/availability rejection still identified the
+            // episodes correctly, so its multi-episode coverage is trustworthy. Identity
+            // rejections are not.
+            let rejections = decision.get("rejections")?.as_array()?;
+            Some(
+                !rejections.is_empty()
+                    && rejections.iter().all(|rejection| {
+                        matches!(
+                            rejection.get("code").and_then(serde_json::Value::as_str),
+                            Some(
+                                "quality_not_allowed"
+                                    | "unknown_quality"
+                                    | "minimum_seeders"
+                                    | "below_minimum_score"
+                            )
+                        )
+                    }),
+            )
         })
         .unwrap_or(false);
-    if !accepted {
+    if !identity_confirmed {
         return MediaDownloadCoverage::default();
     }
     let Ok(release) = parser.parse(&download.title) else {
@@ -2437,6 +2611,90 @@ fn reevaluate_resource_candidates(
     candidates.sort_by(compare_candidates);
 }
 
+#[derive(Debug, Default, Clone)]
+struct UnwantedEpisodes {
+    season: Option<u32>,
+    episodes: HashSet<u32>,
+    absolute_episodes: HashSet<u32>,
+    episodes_before: u32,
+    absolute_before: u32,
+}
+
+impl UnwantedEpisodes {
+    fn season_matches(&self, release: &ReleaseInfo) -> bool {
+        match (release.season, self.season) {
+            (Some(release), Some(season)) => release == season,
+            (None, Some(season)) => season <= 1,
+            _ => true,
+        }
+    }
+
+    fn is_unwanted_episode(&self, episode: u32) -> bool {
+        episode < self.episodes_before || self.episodes.contains(&episode)
+    }
+
+    fn is_unwanted_absolute(&self, episode: u32) -> bool {
+        episode < self.absolute_before || self.absolute_episodes.contains(&episode)
+    }
+
+    /// Number of episodes a release would bring in that are not needed.
+    fn redundant_count(&self, release: &ReleaseInfo) -> u32 {
+        if !release.absolute_episodes.is_empty() {
+            return release
+                .absolute_episodes
+                .iter()
+                .filter(|episode| self.is_unwanted_absolute(**episode))
+                .count() as u32;
+        }
+        if release.episodes.is_empty() || !self.season_matches(release) {
+            return 0;
+        }
+        release
+            .episodes
+            .iter()
+            .filter(|episode| self.is_unwanted_episode(**episode))
+            .count() as u32
+    }
+
+    /// True when every episode in a (file-level) release is unwanted.
+    fn covers_all(&self, release: &ReleaseInfo) -> bool {
+        if !release.absolute_episodes.is_empty() {
+            return release
+                .absolute_episodes
+                .iter()
+                .all(|episode| self.is_unwanted_absolute(*episode));
+        }
+        !release.episodes.is_empty()
+            && self.season_matches(release)
+            && release
+                .episodes
+                .iter()
+                .all(|episode| self.is_unwanted_episode(*episode))
+    }
+}
+
+fn apply_redundant_episode_ranking(
+    candidates: &mut [ResourceCandidate],
+    unwanted: &UnwantedEpisodes,
+) {
+    let mut changed = false;
+    for candidate in candidates.iter_mut() {
+        let (Some(release), Some(sort_key)) =
+            (candidate.release.as_ref(), candidate.sort_key.as_mut())
+        else {
+            continue;
+        };
+        let redundant = unwanted.redundant_count(release);
+        if sort_key.redundant_episodes != redundant {
+            sort_key.redundant_episodes = redundant;
+            changed = true;
+        }
+    }
+    if changed {
+        candidates.sort_by(compare_candidates);
+    }
+}
+
 fn push_case_insensitive(values: &mut Vec<String>, value: &str) {
     let value = value.trim();
     if !value.is_empty()
@@ -2554,6 +2812,60 @@ mod tests {
             media_download_coverage(&envelope, &parser).episodes,
             vec![3, 4, 5]
         );
+    }
+
+    #[test]
+    fn overridden_quality_rejection_keeps_pack_coverage() {
+        let parser = ReleaseParser::default();
+        let overridden = coverage_test_download(
+            Some(42),
+            "Example.Show.S01E03-E05.720p.WEB-DL",
+            r#"{"decision":{"accepted":false,"rejections":[{"code":"quality_not_allowed"}]},"override_reason":"ok"}"#,
+        );
+        assert_eq!(
+            media_download_coverage(&overridden, &parser).episodes,
+            vec![3, 4, 5]
+        );
+        let wrong_identity = coverage_test_download(
+            Some(42),
+            "Example.Show.S01E03-E05.720p.WEB-DL",
+            r#"{"decision":{"accepted":false,"rejections":[{"code":"wrong_title"}]},"override_reason":"ok"}"#,
+        );
+        assert_eq!(
+            media_download_coverage(&wrong_identity, &parser),
+            MediaDownloadCoverage::default()
+        );
+    }
+
+    #[test]
+    fn packs_with_owned_episodes_rank_after_clean_candidates() {
+        let parser = ReleaseParser::default();
+        let unwanted = UnwantedEpisodes {
+            season: Some(1),
+            episodes: [1, 2, 3, 4].into_iter().collect(),
+            absolute_episodes: HashSet::new(),
+            episodes_before: 1,
+            absolute_before: 1,
+        };
+        let pack = parser.parse("Show S01E01-E10 2160p WEB-DL").unwrap();
+        let unseasoned = parser.parse("Show 第1-10集 2160p WEB-DL").unwrap();
+        let single = parser.parse("Show S01E05 720p WEB-DL").unwrap();
+        assert_eq!(unwanted.redundant_count(&pack), 4);
+        assert_eq!(unwanted.redundant_count(&unseasoned), 4);
+        assert_eq!(unwanted.redundant_count(&single), 0);
+
+        let late_start = UnwantedEpisodes {
+            season: Some(1),
+            episodes_before: 5,
+            absolute_before: 1,
+            ..UnwantedEpisodes::default()
+        };
+        assert_eq!(late_start.redundant_count(&pack), 4);
+
+        let owned_file = parser.parse("Show.S01E03.2160p.WEB-DL.mkv").unwrap();
+        let needed_file = parser.parse("Show.S01E07.2160p.WEB-DL.mkv").unwrap();
+        assert!(unwanted.covers_all(&owned_file));
+        assert!(!unwanted.covers_all(&needed_file));
     }
 
     #[test]

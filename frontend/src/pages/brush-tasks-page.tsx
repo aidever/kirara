@@ -5,7 +5,7 @@ import { SearchFeedback, SearchPagination } from "@/components/search-controls";
 import { useServerSearch } from "@/lib/server-search";
 import { usePageState } from "@/lib/page-state";
 import { Highlight, SearchBox } from "@/components/list-controls";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -617,12 +617,10 @@ export function BrushTasksPage() {
         <Card>
           <CardHeader>
             {message ? <Notice onDismiss={() => setMessage("")}>{message}</Notice> : null}
+            {/* 页面标题与说明已在顶部显示，这里只保留操作。 */}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <CardTitle>刷流任务管理</CardTitle>
-                <CardDescription>管理 PT 刷流任务，配置选种与删种规则，查看种子状态。</CardDescription>
-              </div>
-              <div className="flex flex-wrap gap-2">
+              <h3 className="sr-only">刷流任务列表</h3>
+              <div className="flex flex-wrap gap-2 sm:ml-auto">
                 <Button type="button" variant="outline" disabled={taskSearch.loading || taskSearch.refreshing} onClick={reload}>
                   <RefreshCw className={cn("mr-2 h-4 w-4", (taskSearch.loading || taskSearch.refreshing) && "motion-safe:animate-spin")} />刷新
                 </Button>

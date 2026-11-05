@@ -99,8 +99,32 @@ impl Default for BrowserlessTaskConfig {
     }
 }
 
+pub const DEFAULT_ATTENDANCE_PATH: &str = "/attendance.php";
+
 fn default_attendance_path() -> String {
-    "/attendance.php".to_string()
+    DEFAULT_ATTENDANCE_PATH.to_string()
+}
+
+/// Validates a site-relative sign-in path. Query strings are allowed
+/// ("/plugin_sign-in.php?cmd=signin"); hosts, backslashes and fragments are not.
+pub fn validate_attendance_path(path: &str) -> Result<(), String> {
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains('\\')
+        || path.contains('#')
+        || path.chars().any(char::is_control)
+        || path.chars().any(char::is_whitespace)
+        || path.len() > 2048
+    {
+        return Err("签到路径必须是以 / 开头的站内路径，不能包含域名、空格、反斜杠或片段".to_string());
+    }
+    Ok(())
+}
+
+fn attendance_url(base_url: &str, path: &str) -> String {
+    let path = path.trim();
+    let path = if path.is_empty() { DEFAULT_ATTENDANCE_PATH } else { path };
+    format!("{}{}", base_url.trim_end_matches('/'), path)
 }
 
 fn default_browserless_selector() -> String {
@@ -246,6 +270,125 @@ pub async fn execute_task(
         started_at,
         finished_at,
     })
+}
+
+/// Script evaluated inside an opened page: fetch each URL with the page's own session
+/// (cookies plus the csrf/deviceId/channelId meta values some sites require) and return
+/// `[{data}|{error}]` as a JSON string.
+fn page_fetch_json_script(urls: &[String]) -> String {
+    format!(
+        r#"(async () => {{
+ const urls = {};
+ const headers = {{Accept: 'application/json, text/plain, */*'}};
+ for (const [name, key] of [['csrf', 'uid'], ['deviceId', 'uuid'], ['channelId', 'channelId']]) {{
+   const value = document.querySelector(`meta[name="${{name}}"]`)?.content;
+   if (value) headers[key] = value;
+ }}
+ const out = [];
+ for (const url of urls) {{
+   try {{
+     const response = await fetch(url, {{headers, credentials: 'same-origin', signal: AbortSignal.timeout(15000)}});
+     if (!response.ok) {{ out.push({{error: `HTTP ${{response.status}}`}}); continue; }}
+     out.push({{data: await response.json()}});
+   }} catch (error) {{ out.push({{error: String(error)}}); }}
+ }}
+ return JSON.stringify(out);
+}})()"#,
+        json!(urls)
+    )
+}
+
+fn parse_page_fetch_results(raw: &str, expected: usize) -> Result<Vec<Result<Value, String>>, String> {
+    let values: Vec<Value> =
+        serde_json::from_str(raw).map_err(|_| "浏览器返回的榜单数据无效".to_string())?;
+    if values.len() != expected {
+        return Err("浏览器返回的榜单数量不一致".to_string());
+    }
+    Ok(values
+        .into_iter()
+        .map(|value| match value.get("data") {
+            Some(data) => Ok(data.clone()),
+            None => Err(value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("未知错误")
+                .to_string()),
+        })
+        .collect())
+}
+
+const BROWSERLESS_PAGE_FETCH_QUERY: &str = r#"
+mutation PageFetch($url: String!, $script: String!) {
+  goto(url: $url, waitUntil: networkIdle) {
+    status
+  }
+  result: evaluate(content: $script) {
+    value
+  }
+}
+"#;
+
+/// Open `page_url` in the configured remote browser and fetch `urls` from inside the page.
+/// Browserless is preferred when configured (full Chromium); Lightpanda is the fallback.
+/// Each URL gets its own result so one failing endpoint does not hide the others.
+pub async fn browser_page_fetch_json(
+    settings: &GlobalConfig,
+    page_url: &str,
+    urls: &[String],
+) -> Result<Vec<Result<Value, String>>, String> {
+    if urls.is_empty() {
+        return Ok(Vec::new());
+    }
+    let script = page_fetch_json_script(urls);
+    let browserless_ready = settings
+        .browserless
+        .address
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && settings
+            .browserless
+            .token
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    if browserless_ready {
+        let result = post_browserless_bql(
+            &settings.browserless,
+            settings.effective_proxy(settings.use_global_proxy_for_browserless),
+            BROWSERLESS_PAGE_FETCH_QUERY,
+            "PageFetch",
+            json!({ "url": page_url, "script": script }),
+            Duration::from_secs(90),
+        )
+        .await?;
+        if let Some(message) = browserless_error_message(&result) {
+            return Err(message);
+        }
+        let raw = result
+            .pointer("/data/result/value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Browserless 未返回榜单数据".to_string())?;
+        return parse_page_fetch_results(raw, urls.len());
+    }
+
+    let endpoint =
+        build_lightpanda_endpoint(&settings.lightpanda, settings.use_proxy_for_lightpanda)?;
+    let proxy = settings
+        .effective_proxy(settings.use_global_proxy_for_lightpanda)
+        .map(str::to_owned);
+    let page_url = page_url.to_string();
+    let expected = urls.len();
+    let raw = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let mut client = CdpClient::connect_with_proxy(endpoint, proxy.as_deref())?;
+        let session_id = create_target_session(&mut client)?;
+        client.call("Page.enable", json!({}), Some(&session_id))?;
+        client.call("Runtime.enable", json!({}), Some(&session_id))?;
+        navigate_via_cdp(&mut client, &session_id, &page_url, "打开页面失败")?;
+        client.wait(Duration::from_secs(2))?;
+        evaluate_string_await_via_cdp(&mut client, &session_id, &script, Duration::from_secs(60))
+    })
+    .await
+    .map_err(|error| format!("浏览器任务 join 失败: {error}"))??;
+    parse_page_fetch_results(&raw, expected)
 }
 
 fn run_cdp_probe(
@@ -679,12 +822,10 @@ async fn run_browserless_sign_in(
 ) -> Result<SignInOutput, String> {
     let timings = resolve_browserless_timings(&task_config)?;
     let image_captcha = sign_in_method == SIGN_IN_METHOD_OCR_CAPTCHA;
-    let path = if image_captcha {
-        task_config.attendance_path.as_str()
-    } else {
-        "/attendance.php"
-    };
-    let target_url = reqwest::Url::parse(&format!("{}{}", base_url, path))
+    if !task_config.attendance_path.trim().is_empty() {
+        validate_attendance_path(task_config.attendance_path.trim())?;
+    }
+    let target_url = reqwest::Url::parse(&attendance_url(&base_url, &task_config.attendance_path))
         .map_err(|error| format!("签到地址无效: {}", error))?;
     let domain = target_url
         .host_str()
@@ -1471,11 +1612,22 @@ async fn run_cdp_sign_in(
     endpoint: String,
     base_url: String,
     cookie: String,
+    attendance_path: String,
     sign_in_method: String,
     proxy: Option<String>,
 ) -> Result<SignInOutput, String> {
+    if !attendance_path.trim().is_empty() {
+        validate_attendance_path(attendance_path.trim())?;
+    }
     tokio::task::spawn_blocking(move || {
-        run_cdp_sign_in_blocking(endpoint, base_url, cookie, sign_in_method, proxy)
+        run_cdp_sign_in_blocking(
+            endpoint,
+            base_url,
+            cookie,
+            attendance_path,
+            sign_in_method,
+            proxy,
+        )
     })
     .await
     .map_err(|e| format!("签到任务 join 失败: {}", e))?
@@ -1485,6 +1637,7 @@ fn run_cdp_sign_in_blocking(
     endpoint: String,
     base_url: String,
     cookie: String,
+    attendance_path: String,
     sign_in_method: String,
     proxy: Option<String>,
 ) -> Result<SignInOutput, String> {
@@ -1504,13 +1657,17 @@ fn run_cdp_sign_in_blocking(
         return Err("Cookie 无效或已过期".to_string());
     }
 
-    let attendance_url = format!("{}/attendance.php", base_url);
+    let attendance_url = attendance_url(&base_url, &attendance_path);
     navigate_via_cdp(&mut client, &session_id, &attendance_url, "打开签到页失败")?;
     wait_for_cloudflare(&mut client, &session_id)?;
 
+    // The NexusPHP query-string fallbacks only make sense for the stock attendance page.
+    let default_page = signers::custom_attendance_path(&attendance_path).is_none();
     match sign_in_method.as_str() {
         SIGN_IN_METHOD_OPEN_PAGE => run_open_page_sign_in(&mut client, &session_id),
-        SIGN_IN_METHOD_CLOUDFLARE => run_cloudflare_sign_in(&mut client, &session_id, &base_url),
+        SIGN_IN_METHOD_CLOUDFLARE => {
+            run_cloudflare_sign_in(&mut client, &session_id, &base_url, default_page)
+        }
         other => Err(format!("未知签到方式: {}", other)),
     }
 }
@@ -1531,6 +1688,7 @@ fn run_cloudflare_sign_in(
     client: &mut CdpClient,
     session_id: &str,
     base_url: &str,
+    try_nexus_fallbacks: bool,
 ) -> Result<SignInOutput, String> {
     let text = page_text_via_cdp(client, session_id)?;
     if let Some(result) = classify_sign_in_text(&text) {
@@ -1540,7 +1698,7 @@ fn run_cloudflare_sign_in(
     let clicked = evaluate_bool_via_cdp(client, session_id, CLICK_SIGN_IN_SCRIPT)?;
     if clicked {
         client.wait(Duration::from_millis(2500))?;
-    } else {
+    } else if try_nexus_fallbacks {
         for url in [
             format!("{}/attendance.php?action=sign", base_url),
             format!("{}/attendance.php?do=sign", base_url),

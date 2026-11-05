@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Clock, Edit, Loader2, Plus, RadioTower, RefreshCw, Tag, Trash2, Zap } from "lucide-react";
+import { Check, Clock, Edit, Loader2, Plus, RadioTower, RefreshCw, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -435,14 +435,8 @@ export function TagRulesPage() {
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <CardTitle className="flex items-center gap-2">
-                <Tag className="h-5 w-5 text-primary" />
-                标签规则
-              </CardTitle>
-              <CardDescription>
-                根据种子的 Tracker 域名自动匹配并添加标签。
-              </CardDescription>
-              <div className="mt-2 flex items-center gap-2 text-xs text-muted">
+              <h3 className="sr-only">标签规则列表</h3>
+              <div className="flex items-center gap-2 text-xs text-muted">
                 <Clock className="h-3.5 w-3.5" aria-hidden="true" />
                 <label htmlFor="tag-rule-scan-interval">扫描间隔</label>
                 <select

@@ -441,6 +441,32 @@ impl DownloaderClient for QBittorrentClient {
                 .map_err(|e| format!("获取种子文件清单失败: {e}"))
         })
     }
+
+    fn skip_torrent_files<'a>(
+        &'a self,
+        hash: &'a str,
+        paths: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            let contents = self
+                .qb
+                .get_torrent_contents(hash, None)
+                .await
+                .map_err(|e| format!("获取种子文件清单失败: {e}"))?;
+            let indexes: Vec<i64> = contents
+                .iter()
+                .filter(|file| paths.iter().any(|path| path == &file.name))
+                .filter_map(|file| i64::try_from(file.index).ok())
+                .collect();
+            if indexes.is_empty() {
+                return Ok(());
+            }
+            self.qb
+                .set_file_priority(hash, indexes, qbit_rs::model::Priority::DoNotDownload)
+                .await
+                .map_err(|e| format!("设置文件优先级失败: {e}"))
+        })
+    }
 }
 
 impl From<qbit_rs::model::TorrentContent> for TorrentFileInfo {

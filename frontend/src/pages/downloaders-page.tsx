@@ -822,10 +822,7 @@ export function DownloadersPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">下载器管理</h2>
-          <p className="mt-1 text-sm text-muted">管理已配置的下载器实例</p>
-        </div>
+        <p className="text-sm text-muted">{loading ? "正在读取下载器" : `${downloaders.length} 个下载器`}</p>
         <Button onClick={openAdd}>
           <Plus className="mr-2 h-4 w-4" />
           添加下载器
@@ -859,10 +856,7 @@ export function DownloadersPage() {
 
       {/* Table (desktop) */}
       <Card className="rounded-2xl">
-        <CardHeader>
-          <CardTitle>下载器列表</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           {message ? <Notice className="mb-4" onDismiss={() => setMessage("")}>{message}</Notice> : null}
 
           {loading ? (

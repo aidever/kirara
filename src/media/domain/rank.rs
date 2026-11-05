@@ -17,6 +17,11 @@ const SIZE_FITNESS_MAX: u32 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SortKey {
     pub accepted: bool,
+    /// Episodes in a multi-episode release that the subscription already owns or
+    /// deliberately skipped. Fewer is better, so a pack that would re-download
+    /// existing episodes only wins when nothing cleaner is available.
+    #[serde(default)]
+    pub redundant_episodes: u32,
     pub score: u32,
     /// Legacy composite quality rank retained in snapshots and the public API.
     /// Candidate ordering uses the explicit component ranks below.
@@ -65,6 +70,7 @@ impl SortKey {
         };
         Self {
             accepted: decision.accepted,
+            redundant_episodes: 0,
             score: decision.score,
             quality_rank: decision.quality_rank,
             resolution_rank: profile.resolution_rank(release),
@@ -90,6 +96,7 @@ impl Ord for SortKey {
     fn cmp(&self, other: &Self) -> Ordering {
         self.accepted
             .cmp(&other.accepted)
+            .then_with(|| other.redundant_episodes.cmp(&self.redundant_episodes))
             .then_with(|| self.resolution_rank.cmp(&other.resolution_rank))
             .then_with(|| self.source_rank.cmp(&other.source_rank))
             .then_with(|| self.size_fitness.cmp(&other.size_fitness))

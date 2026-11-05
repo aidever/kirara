@@ -2,7 +2,6 @@ import { useHashChoice } from "@/lib/navigation-state";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import {
   AlertTriangle,
-  CalendarCheck,
   Cloud,
   ClipboardList,
   Edit,
@@ -29,7 +28,7 @@ import { SearchFeedback, SearchPagination } from "@/components/search-controls";
 import { useServerSearch } from "@/lib/server-search";
 import { usePageState } from "@/lib/page-state";
 import { Highlight, SearchBox } from "@/components/list-controls";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -75,6 +74,26 @@ const DEFAULT_BROWSERLESS_TASK = {
   action_timeout: null,
   post_click_wait_ms: null,
 };
+
+/** 用户改过的签到路径（非默认值）优先于站点预设。 */
+function customAttendancePath(path: string | null | undefined): string | null {
+  const value = path?.trim() ?? "";
+  return value && value !== DEFAULT_BROWSERLESS_TASK.attendance_path ? value : null;
+}
+
+/** 允许粘贴完整签到地址：只保留站内路径和查询参数。 */
+function normalizeAttendancePath(value: string): string {
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      return `${url.pathname}${url.search}`;
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
 
 type SiteSigner = { site_id: number; profile: {
   id: string; label: string; browser: SignInBrowser; sign_in_method: string;
@@ -157,6 +176,14 @@ function cronToInterval(cron: string): SignInIntervalHours {
   return SIGN_IN_INTERVAL_HOURS.includes(hours as SignInIntervalHours) ? (hours as SignInIntervalHours) : 8;
 }
 
+function withSignerPreset<T extends { browser?: string | null; sign_in_method?: string | null; browserless?: { attendance_path?: string } | null }>(
+  task: T,
+  profile: SiteSigner["profile"],
+): T {
+  const attendancePath = customAttendancePath(task.browserless?.attendance_path) ?? profile.browserless.attendance_path;
+  return { ...task, browser: profile.browser, sign_in_method: profile.sign_in_method, browserless: { ...profile.browserless, attendance_path: attendancePath } };
+}
+
 export function SignInPage() {
   const [tasks, setTasks] = useState<SignInTaskRecord[]>([]);
   const [profiles, setProfiles] = useState<SiteSigner[]>([]);
@@ -213,7 +240,7 @@ export function SignInPage() {
   const activeSearch = activeView === "tasks" ? taskSearch : recordSearch;
   const filteredTasks = useMemo(() => taskSearch.records.map((task) => {
     const profile = profiles.find((item) => item.site_id === task.site_id)?.profile;
-    return profile && !task.browserless?.manual_override ? { ...task, browser: profile.browser, sign_in_method: profile.sign_in_method, browserless: profile.browserless } : task;
+    return profile && !task.browserless?.manual_override ? withSignerPreset(task, profile) : task;
   }), [taskSearch.records, profiles]);
   const filteredRecords = recordSearch.records;
   const suggestedTaskName = editingId === null
@@ -260,7 +287,8 @@ export function SignInPage() {
         setProfiles(nextProfiles);
         setTasks(nextTasks.map(task => {
           const profile = nextProfiles.find(item => item.site_id === task.site_id)?.profile;
-          return profile ? { ...task, browser: profile.browser, sign_in_method: profile.sign_in_method, browserless: profile.browserless } : task;
+          // 手动覆盖的任务保留自己的配置，否则编辑时会被预设悄悄替换。
+          return profile && !task.browserless?.manual_override ? withSignerPreset(task, profile) : task;
         }));
         setSites(nextSites);
         setSettings(nextSettings);
@@ -384,7 +412,7 @@ export function SignInPage() {
     setEditingId(task.id);
     const next = taskToForm(task);
     const profile = siteSignInPreset(nexusSites.find(site => site.id === task.site_id));
-    if (profile && !next.browserless?.manual_override) Object.assign(next, { browser: profile.browser, sign_in_method: profile.sign_in_method, browserless: profile.browserless });
+    if (profile && !next.browserless?.manual_override) Object.assign(next, withSignerPreset(next, profile));
     else if (next.sign_in_method === "cloudflare" || next.sign_in_method === "ocr_captcha") next.browser = "browserless";
     setForm(next);
     setIntervalHours(cronToInterval(task.cron_expression));
@@ -485,8 +513,13 @@ export function SignInPage() {
       return;
     }
 
-    if (imageCaptcha && (!browserlessTask.captcha_selector.trim() || !browserlessTask.captcha_input_selector.trim() || !browserlessTask.attendance_path.trim())) {
-      setSubmitError("请填写签到路径、验证码图片和输入框的 Selector。");
+    if (imageCaptcha && (!browserlessTask.captcha_selector.trim() || !browserlessTask.captcha_input_selector.trim())) {
+      setSubmitError("请填写验证码图片和输入框的 Selector。");
+      return;
+    }
+    const attendancePath = normalizeAttendancePath(browserlessTask.attendance_path);
+    if (attendancePath && (!attendancePath.startsWith("/") || attendancePath.startsWith("//") || /[\s#\\]/.test(attendancePath))) {
+      setSubmitError("签到页面路径需以 / 开头，例如 /attendance.php，不能包含空格、# 或反斜杠。");
       return;
     }
     const body: SignInTaskRequest = {
@@ -495,8 +528,9 @@ export function SignInPage() {
       cron_expression: intervalToCron(intervalHours),
       browser: form.browser ?? "lightpanda",
       sign_in_method: form.sign_in_method ?? "open_page",
-      browserless: form.browser !== "browserless" && !form.browserless?.manual_override && !form.browserless?.selector.trim() ? null : {
+      browserless: form.browser !== "browserless" && !form.browserless?.manual_override && !form.browserless?.selector.trim() && !customAttendancePath(form.browserless?.attendance_path) ? null : {
         ...(form.browserless ?? DEFAULT_BROWSERLESS_TASK),
+        attendance_path: normalizeAttendancePath(form.browserless?.attendance_path ?? "") || DEFAULT_BROWSERLESS_TASK.attendance_path,
         selector: (form.browserless?.selector ?? DEFAULT_BROWSERLESS_TASK.selector).trim(),
       },
     };
@@ -572,14 +606,8 @@ export function SignInPage() {
         <CardHeader>
           {message ? <Notice onDismiss={() => setMessage("")} dismissLabel="关闭消息">{message}</Notice> : null}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <CalendarCheck className="h-5 w-5" />
-                自动签到
-              </CardTitle>
-              <CardDescription>管理 NexusPHP 站点签到任务、调度状态和最近执行结果。</CardDescription>
-            </div>
-            <div className="flex flex-wrap gap-2">
+            <h3 className="sr-only">自动签到任务</h3>
+            <div className="flex flex-wrap gap-2 sm:ml-auto">
               <Button variant="outline" disabled={!settings || loading} onClick={openSettings}>
                 <Settings2 className="mr-2 h-4 w-4" />
                 配置签到工具
@@ -1141,12 +1169,25 @@ export function SignInPage() {
                 ? "默认使用系统适配，可手动选择其他方式；选择系统适配可恢复预设。"
                 : "此站尚未自动适配，默认尝试打开页面签到。如需其他方式，请按站点实际情况选择。"}</p>
             </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="browserless-attendance_path">签到页面路径</Label>
+              <Input
+                id="browserless-attendance_path"
+                value={browserlessTask.attendance_path}
+                onChange={event => setBrowserlessTaskField("attendance_path", event.target.value)}
+                onBlur={event => setBrowserlessTaskField("attendance_path", normalizeAttendancePath(event.target.value))}
+                placeholder={DEFAULT_BROWSERLESS_TASK.attendance_path}
+                spellCheck={false}
+                maxLength={2048}
+                aria-describedby="sign-in-path-hint"
+              />
+              <p id="sign-in-path-hint" className="text-xs text-muted">多数 NexusPHP 站点无需修改。签到页不在 /attendance.php 时填写站内路径，可带参数，也可直接粘贴完整地址。</p>
+            </div>
             {!usingPreset && imageCaptcha ? <>
               <p id="sign-in-image-guidance" className="text-xs leading-relaxed text-muted sm:col-span-2">
-                以下五项需要了解站点页面结构。普通用户可通过 <a href="https://github.com/imythu/kirara/issues/new" target="_blank" rel="noreferrer" className="text-primary underline underline-offset-4">GitHub 联系作者适配站点</a>。
+                以下几项需要了解站点页面结构。普通用户可通过 <a href="https://github.com/imythu/kirara/issues/new" target="_blank" rel="noreferrer" className="text-primary underline underline-offset-4">GitHub 联系作者适配站点</a>。
               </p>
               {([
-                ["attendance_path", "签到路径", "/attendance.php"],
                 ["captcha_selector", "验证码图片 Selector", "验证码图片的 CSS Selector"],
                 ["captcha_input_selector", "验证码输入框 Selector", "验证码输入框的 CSS Selector"],
                 ["selector", "签到按钮 Selector", "签到按钮的 CSS Selector"],

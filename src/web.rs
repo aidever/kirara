@@ -429,6 +429,7 @@ fn media_router(
             get(get_media_settings).put(update_media_settings),
         )
         .route("/tmdb/search", get(search_tmdb_media))
+        .route("/maoyan", get(get_maoyan_rank))
         .route("/tmdb/details", get(get_tmdb_details_query))
         .route("/tmdb/season", get(get_tmdb_season_query))
         .route("/tmdb/{media_type}/{id}", get(get_tmdb_details_path))
@@ -1471,6 +1472,41 @@ async fn update_media_settings(
         .await
         .map_err(media_app_error)?;
     Ok(Json(MediaSettingsResponse::from_settings(updated)))
+}
+
+#[derive(Debug, Deserialize)]
+struct MaoyanRankQuery {
+    chart: String,
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    refresh: Option<bool>,
+}
+
+async fn get_maoyan_rank(
+    State(state): State<MediaApiState>,
+    Query(query): Query<MaoyanRankQuery>,
+) -> Result<Json<crate::media::maoyan::MaoyanRankResponse>, ApiError> {
+    use crate::media::maoyan::{MaoyanChart, MaoyanPlatform};
+    let chart = MaoyanChart::parse(&query.chart).ok_or_else(|| {
+        ApiError::bad_request("chart must be movie, web_movie, tv, web_series, or variety")
+    })?;
+    let platform = MaoyanPlatform::parse(query.platform.as_deref().unwrap_or("all"))
+        .ok_or_else(|| ApiError::bad_request("platform must be all, tencent, iqiyi, youku, or mango"))?;
+    Ok(Json(
+        state
+            .service
+            .maoyan_rank(
+                chart,
+                platform,
+                query.limit.unwrap_or(20),
+                query.refresh.unwrap_or(false),
+            )
+            .await
+            .map_err(ApiError::from)?,
+    ))
 }
 
 async fn search_tmdb_media(
@@ -3647,6 +3683,11 @@ async fn validate_sign_in_task(
         }
     }
     browserless.attendance_path = browserless.attendance_path.trim().to_string();
+    if browserless.attendance_path.is_empty() {
+        browserless.attendance_path = crate::sign_in::DEFAULT_ATTENDANCE_PATH.to_string();
+    }
+    crate::sign_in::validate_attendance_path(&browserless.attendance_path)
+        .map_err(ApiError::bad_request)?;
     browserless.captcha_selector = browserless.captcha_selector.trim().to_string();
     browserless.captcha_input_selector = browserless.captcha_input_selector.trim().to_string();
     browserless.already_keywords = browserless.already_keywords.trim().to_string();
@@ -3656,18 +3697,6 @@ async fn validate_sign_in_task(
     if body.sign_in_method.as_deref() == Some(crate::sign_in::SIGN_IN_METHOD_OCR_CAPTCHA) {
         if browser != crate::sign_in::SIGN_IN_BROWSER_BROWSERLESS {
             return Err(ApiError::bad_request("图片验证码签到请使用 Browserless"));
-        }
-        let path = &browserless.attendance_path;
-        if !path.starts_with('/')
-            || path.starts_with("//")
-            || path.contains('\\')
-            || path.contains('#')
-            || path.chars().any(char::is_control)
-            || path.len() > 2048
-        {
-            return Err(ApiError::bad_request(
-                "签到路径必须是以 / 开头的站内路径，不能包含域名、反斜杠或片段",
-            ));
         }
         for selector in [
             &browserless.captcha_selector,
@@ -5604,6 +5633,7 @@ impl From<MediaServiceError> for ApiError {
             }
             MediaServiceError::Serialization(_) => Self::internal("failed to serialize media data"),
             MediaServiceError::Downloader(_) => Self::bad_gateway("downloader request failed"),
+            MediaServiceError::Upstream(message) => Self::bad_gateway(message),
         }
     }
 }

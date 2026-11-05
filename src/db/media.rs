@@ -1419,6 +1419,47 @@ impl Database {
         .map_err(join_error)?
     }
 
+    /// Episodes of the subscription's current season that were already handed to the
+    /// downloader. Used to avoid fetching the same episode twice through a multi-episode pack.
+    pub async fn list_subscription_submitted_episodes(
+        &self,
+        subscription_id: i64,
+        season: Option<u32>,
+    ) -> Result<MediaDownloadCoverage, AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            let mut statement = conn
+                .prepare(
+                    "SELECT episode, absolute_episode FROM subscription_targets
+                     WHERE subscription_id = ? AND season IS ? AND status = 'submitted'
+                     ORDER BY episode, absolute_episode",
+                )
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map(params![subscription_id, season], |row| {
+                    Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<u32>>(1)?))
+                })
+                .map_err(sql_error)?;
+            let mut coverage = MediaDownloadCoverage {
+                season,
+                ..MediaDownloadCoverage::default()
+            };
+            for row in rows {
+                let (episode, absolute) = row.map_err(sql_error)?;
+                if let Some(episode) = episode {
+                    coverage.episodes.push(episode);
+                }
+                if let Some(absolute) = absolute {
+                    coverage.absolute_episodes.push(absolute);
+                }
+            }
+            Ok(coverage)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
     pub async fn enqueue_media_download(
         &self,
         request: &NewMediaDownload,
@@ -3526,6 +3567,18 @@ fn contiguous_coverage_end(values: &[u32], start: u32) -> u32 {
     end
 }
 
+/// A pack without a season marker ("第1-10集", "E01-E10") is accepted for season 1 by the
+/// decision engine, so its coverage must also apply to season 1. Otherwise the cursor
+/// stays on the next episode and the same pack is fetched again for every episode.
+fn coverage_season_matches(coverage_season: Option<u32>, subscription_season: Option<u32>) -> bool {
+    match (coverage_season, subscription_season) {
+        (Some(coverage), Some(subscription)) => coverage == subscription,
+        (None, Some(subscription)) => subscription <= 1,
+        (None, None) => true,
+        (Some(_), None) => false,
+    }
+}
+
 fn materialize_covered_subscription_targets(
     conn: &Connection,
     subscription: &SubscriptionRecord,
@@ -3547,13 +3600,13 @@ fn materialize_covered_subscription_targets(
             desired_episode = start_episode
                 .checked_add(delta)
                 .ok_or_else(|| invalid("covered episode range overflowed"))?;
-        } else if coverage.season == subscription.season {
+        } else if coverage_season_matches(coverage.season, subscription.season) {
             let episode_end = contiguous_coverage_end(&coverage.episodes, start_episode);
             if episode_end > start_episode {
                 desired_episode = episode_end;
             }
         }
-    } else if coverage.season == subscription.season {
+    } else if coverage_season_matches(coverage.season, subscription.season) {
         desired_episode = contiguous_coverage_end(&coverage.episodes, start_episode);
     }
 
@@ -4859,6 +4912,14 @@ mod tests {
             .await
             .unwrap()
         );
+    }
+
+    #[test]
+    fn unseasoned_pack_coverage_applies_to_the_first_season_only() {
+        assert!(coverage_season_matches(None, Some(1)));
+        assert!(!coverage_season_matches(None, Some(2)));
+        assert!(coverage_season_matches(Some(2), Some(2)));
+        assert!(!coverage_season_matches(Some(1), Some(2)));
     }
 
     #[tokio::test]

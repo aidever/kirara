@@ -61,8 +61,8 @@ type AppPage =
 
 type NavGroup = "resources" | "connections" | "automation" | "system";
 const navGroups: Array<{ key: NavGroup; label: string }> = [
-  { key: "resources", label: "资源与订阅" },
-  { key: "connections", label: "连接配置" },
+  { key: "resources", label: "影视与资源" },
+  { key: "connections", label: "站点与下载器" },
   { key: "automation", label: "自动任务" },
   { key: "system", label: "系统与监控" },
 ];
@@ -112,7 +112,7 @@ const navItems: Array<{
   icon: typeof LayoutDashboard;
   group: NavGroup;
 }> = [
-  { key: "system-overview", label: "系统总览", description: "CPU、内存使用率与历史趋势", icon: LayoutDashboard, group: "system" },
+  { key: "system-overview", label: "系统总览", description: "上手指引与 CPU、内存运行状态", icon: LayoutDashboard, group: "system" },
   {
     key: "media",
     label: "自动追剧",
@@ -213,7 +213,9 @@ function readPageFromHash(): AppPage {
   if (valid.includes(raw as AppPage)) {
     return raw as AppPage;
   }
-  return raw === "" ? "system-overview" : "brush-tasks";
+  // 早期刷流版本的旧书签继续指向对应页面；其他未知地址回到首页，而不是落到某个功能页让人困惑。
+  const legacy: Record<string, AppPage> = { tasks: "brush-tasks", history: "brush-tasks", dashboard: "brush-tasks", settings: "system-settings" };
+  return legacy[raw] ?? "system-overview";
 }
 
 function setHash(page: AppPage, remembered?: string) {

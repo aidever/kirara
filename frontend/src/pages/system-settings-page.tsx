@@ -123,8 +123,8 @@ export function SystemSettingsPage({
         }}
       >
       <CardHeader>
-        <CardTitle>系统设置</CardTitle>
-        <CardDescription>全局后端程序配置。日志级别保存后会立即作用到整个后端进程。</CardDescription>
+        <CardTitle>日志与代理</CardTitle>
+        <CardDescription>保存后立即作用于整个后端进程。</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <div className="space-y-2">

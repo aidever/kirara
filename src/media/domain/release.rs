@@ -481,8 +481,35 @@ fn parse_chinese_number(value: &str) -> Option<u32> {
 }
 
 fn parse_resolution(title: &str) -> Option<String> {
-    resolution_regex().captures(title).map(|captures| {
-        let compact = captures["value"].to_ascii_lowercase();
+    // An explicit scan height ("1080p") is authoritative. Marketing tokens such as "4K"
+    // or "UHD" also appear in titles of 1080p re-encodes ("4K修复版 1080p"), so they are
+    // only used when no explicit height or frame size is present.
+    if let Some(captures) = explicit_resolution_regex().captures(title) {
+        return Some(normalize_resolution_token(&captures["value"]));
+    }
+    if let Some(captures) = frame_size_regex().captures(title) {
+        let height = &captures["height"];
+        return Some(
+            match height {
+                "4320" => "4320p",
+                "2160" => "2160p",
+                "1440" => "1440p",
+                "1080" => "1080p",
+                "720" => "720p",
+                "576" => "576p",
+                _ => "480p",
+            }
+            .to_owned(),
+        );
+    }
+    resolution_regex()
+        .captures(title)
+        .map(|captures| normalize_resolution_token(&captures["value"]))
+}
+
+fn normalize_resolution_token(value: &str) -> String {
+    {
+        let compact = value.to_ascii_lowercase();
         match compact.as_str() {
             "8k" | "4320p" => "4320p",
             "4k" | "uhd" | "2160" | "2160p" | "2160i" => "2160p",
@@ -494,7 +521,7 @@ fn parse_resolution(title: &str) -> Option<String> {
             _ => unreachable!("resolution regex and mapping must stay aligned"),
         }
         .to_owned()
-    })
+    }
 }
 
 fn parse_codec(title: &str) -> Option<String> {
@@ -526,6 +553,9 @@ fn parse_source(title: &str) -> Option<String> {
         Some("HDTV".into())
     } else if dvd_regex().is_match(title) {
         Some("DVD".into())
+    } else if web_bare_regex().is_match(title) {
+        // Scene and P2P releases commonly label web downloads as plain "WEB".
+        Some("WEB-DL".into())
     } else if cam_regex().is_match(title) {
         Some("CAM".into())
     } else {
@@ -718,6 +748,15 @@ regex_fn!(
     resolution_regex,
     r"(?i)(?:^|[^a-z0-9])(?P<value>4320p|8k|2160[pi]|4k|uhd|1440p|2k|1080[pi]|720p|576[pi]|480[pi])(?:[^a-z0-9]|$)"
 );
+regex_fn!(
+    explicit_resolution_regex,
+    r"(?i)(?:^|[^a-z0-9])(?P<value>4320p|2160[pi]|1440p|1080[pi]|720p|576[pi]|480[pi])(?:[^a-z0-9]|$)"
+);
+regex_fn!(
+    frame_size_regex,
+    r"(?i)(?:^|[^0-9])(?:7680|4096|3840|2560|1920|1440|1280|1024|720|640)\s*[x×]\s*(?P<height>4320|2160|1440|1080|720|576|480)(?:[^0-9]|$)"
+);
+regex_fn!(web_bare_regex, r"(?:^|[^A-Za-z0-9])WEB(?:[^A-Za-z0-9]|$)");
 regex_fn!(av1_regex, r"(?i)(?:^|[^a-z0-9])(?:av1|av01)(?:[^a-z0-9]|$)");
 regex_fn!(
     h265_regex,
@@ -989,5 +1028,43 @@ mod tests {
         let restored: ReleaseInfo = serde_json::from_value(value).unwrap();
         assert!(restored.hdr_formats.is_empty());
         assert_eq!(restored.bit_depth, None);
+    }
+
+    #[test]
+    fn explicit_resolution_wins_over_marketing_tokens() {
+        let release = parser()
+            .parse("Example Show 4K修复版 S01E01 1080p WEB-DL H264")
+            .unwrap();
+        assert_eq!(release.resolution.as_deref(), Some("1080p"));
+
+        let uhd_source = parser()
+            .parse("Example.Movie.2020.UHD.BluRay.1080p.x264-GROUP")
+            .unwrap();
+        assert_eq!(uhd_source.resolution.as_deref(), Some("1080p"));
+
+        let only_4k = parser().parse("Example Show S01E01 4K WEB-DL").unwrap();
+        assert_eq!(only_4k.resolution.as_deref(), Some("2160p"));
+    }
+
+    #[test]
+    fn frame_sizes_map_to_resolutions() {
+        let release = parser()
+            .parse("Example Show S01E01 3840x2160 WEB-DL HEVC")
+            .unwrap();
+        assert_eq!(release.resolution.as_deref(), Some("2160p"));
+        let release = parser().parse("Example Show 第3集 1920×1080 HDTV").unwrap();
+        assert_eq!(release.resolution.as_deref(), Some("1080p"));
+    }
+
+    #[test]
+    fn bare_uppercase_web_is_a_web_download() {
+        let release = parser()
+            .parse("Example.Show.S01E01.1080p.WEB.h264-GROUP")
+            .unwrap();
+        assert_eq!(release.source.as_deref(), Some("WEB-DL"));
+        assert_eq!(release.title, "Example Show");
+
+        let titled = parser().parse("The.Web.S01E01.1080p.HDTV.x264").unwrap();
+        assert_eq!(titled.source.as_deref(), Some("HDTV"));
     }
 }

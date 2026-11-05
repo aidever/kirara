@@ -1779,15 +1779,16 @@ export function MediaPage() {
     setDeleteSubscription(null);
   }
 
-  async function searchTmdb(event?: FormEvent, typeOverride?: "multi" | MediaType) {
+  async function searchTmdb(event?: FormEvent, typeOverride?: "multi" | MediaType, queryOverride?: string) {
     event?.preventDefault();
-    if (!tmdbQuery.trim()) return;
+    const query = (queryOverride ?? tmdbQuery).trim();
+    if (!query) return;
     const generation = ++tmdbSearchGeneration.current;
     setTmdbLoading(true);
     setTmdbSearched(true);
     setNotice(null);
     try {
-      const params = new URLSearchParams({ query: tmdbQuery.trim(), media_type: typeOverride ?? tmdbType });
+      const params = new URLSearchParams({ query, media_type: typeOverride ?? tmdbType });
       const payload = await api<unknown>(`/api/media/tmdb/search?${params.toString()}`);
       if (generation === tmdbSearchGeneration.current) setTmdbResults(readArray<TmdbMedia>(payload, ["results", "items", "data"]));
     } catch (error) {
@@ -2257,6 +2258,18 @@ export function MediaPage() {
           }}
           onSearch={searchTmdb}
           onSubscribe={(media) => void openSubscriptionDialog(media)}
+          onSearchTitle={(title, type) => {
+            setTmdbQuery(title);
+            setTmdbType(type);
+            void searchTmdb(undefined, type, title);
+          }}
+          onClearSearch={() => {
+            tmdbSearchGeneration.current += 1;
+            setTmdbLoading(false);
+            setTmdbQuery("");
+            setTmdbResults([]);
+            setTmdbSearched(false);
+          }}
         />
       ) : mode === "resources" ? (
         <ResourcesPanel
@@ -3984,6 +3997,8 @@ function TmdbPanel({
   onMediaTypeChange,
   onSearch,
   onSubscribe,
+  onSearchTitle,
+  onClearSearch,
 }: {
   query: string;
   mediaType: "multi" | MediaType;
@@ -3994,16 +4009,14 @@ function TmdbPanel({
   onMediaTypeChange: (value: string) => void;
   onSearch: (event: FormEvent) => void;
   onSubscribe: (media: TmdbMedia) => void;
+  onSearchTitle: (title: string, type: MediaType) => void;
+  onClearSearch: () => void;
 }) {
   return (
     <div className="flex flex-col gap-6">
       <Card>
-        <CardHeader>
-          <CardTitle>添加影视</CardTitle>
-          <CardDescription>TMDB 影视库</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]" onSubmit={onSearch}>
+        <CardContent className="pt-6">
+          <form className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]" onSubmit={onSearch} aria-label="在 TMDB 中查找影视">
             <div className="flex flex-col gap-2">
               <Label htmlFor="tmdb-query">影视名称</Label>
               <Input id="tmdb-query" type="search" data-primary-search="true" aria-keyshortcuts="/" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="输入中文名或原名" autoComplete="off" />
@@ -4033,8 +4046,10 @@ function TmdbPanel({
       ) : results.length > 0 ? (
         <section aria-label="TMDB 搜索结果">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold">搜索结果</h3>
-            <span className="text-xs text-muted">{results.length} 项</span>
+            <h3 className="text-sm font-semibold">搜索结果 <span className="ml-1 text-xs font-normal text-muted">{results.length} 项</span></h3>
+            <Button variant="outline" className="h-8 px-3" onClick={onClearSearch}>
+              <X data-icon="inline-start" />返回榜单
+            </Button>
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {results.map((media) => (
@@ -4064,11 +4079,155 @@ function TmdbPanel({
           </div>
         </section>
       ) : searched ? (
-        <EmptyState icon={Film} title="没有找到匹配影视" />
+        <EmptyState icon={Film} title="没有找到匹配影视" action={{ label: "返回榜单", onClick: onClearSearch }} />
       ) : (
-        <EmptyState icon={Search} title="输入影视名称开始搜索" />
+        <MaoyanRankSection onSubscribe={onSubscribe} onSearchTitle={onSearchTitle} />
       )}
     </div>
+  );
+}
+
+type MaoyanChart = "movie" | "web_movie" | "tv" | "web_series" | "variety";
+type MaoyanPlatform = "all" | "tencent" | "iqiyi" | "youku" | "mango";
+type MaoyanRankItem = {
+  rank: number;
+  title: string;
+  release_info: string | null;
+  platform: string | null;
+  metric: string | null;
+  tmdb: TmdbMedia | null;
+};
+type MaoyanRankResponse = { chart: MaoyanChart; show_date: string; items: MaoyanRankItem[] };
+
+const MAOYAN_CHARTS: { value: MaoyanChart; label: string; type: MediaType }[] = [
+  { value: "movie", label: "实时票房", type: "movie" },
+  { value: "tv", label: "电视剧", type: "tv" },
+  { value: "web_series", label: "网剧", type: "tv" },
+  { value: "variety", label: "综艺", type: "tv" },
+  { value: "web_movie", label: "网络电影", type: "movie" },
+];
+const MAOYAN_PLATFORMS: { value: MaoyanPlatform; label: string }[] = [
+  { value: "all", label: "全网" },
+  { value: "tencent", label: "腾讯视频" },
+  { value: "iqiyi", label: "爱奇艺" },
+  { value: "youku", label: "优酷" },
+  { value: "mango", label: "芒果TV" },
+];
+
+function MaoyanRankSection({
+  onSubscribe,
+  onSearchTitle,
+}: {
+  onSubscribe: (media: TmdbMedia) => void;
+  onSearchTitle: (title: string, type: MediaType) => void;
+}) {
+  const [chart, setChart] = usePageState<MaoyanChart>("media:maoyan:chart", "movie", (value): value is MaoyanChart => MAOYAN_CHARTS.some((item) => item.value === value));
+  const [platform, setPlatform] = usePageState<MaoyanPlatform>("media:maoyan:platform", "all", (value): value is MaoyanPlatform => MAOYAN_PLATFORMS.some((item) => item.value === value));
+  const [data, setData] = useState<MaoyanRankResponse | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const generation = useRef(0);
+  const chartMeta = MAOYAN_CHARTS.find((item) => item.value === chart) ?? MAOYAN_CHARTS[0];
+  const usesPlatform = chart !== "movie";
+
+  const load = useCallback(async (refresh = false) => {
+    const current = ++generation.current;
+    setLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({ chart, platform: usesPlatform ? platform : "all", limit: "20" });
+      if (refresh) params.set("refresh", "true");
+      const payload = await api<MaoyanRankResponse>(`/api/media/maoyan?${params.toString()}`);
+      if (current === generation.current) setData(payload);
+    } catch (loadError) {
+      if (current !== generation.current) return;
+      setData(null);
+      setError(describeUnknown(loadError));
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
+  }, [chart, platform, usesPlatform]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <section aria-label="猫眼榜单" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">猫眼榜单</h3>
+          <p className="text-xs text-muted">看看大家在看什么，点“订阅”即可追更。{data?.show_date ? ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}` : ""}</p>
+        </div>
+        <Button variant="outline" className="h-8 px-3" disabled={loading} onClick={() => void load(true)}>
+          <RefreshCw className={cn(loading && "animate-spin")} data-icon="inline-start" />刷新
+        </Button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="榜单类型">
+        {MAOYAN_CHARTS.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            role="tab"
+            aria-selected={chart === item.value}
+            className={cn(
+              "h-8 cursor-pointer rounded-full border px-3 text-xs font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+              chart === item.value ? "border-primary/30 bg-primary/10 text-foreground" : "border-border text-muted hover:bg-accent hover:text-foreground",
+            )}
+            onClick={() => setChart(item.value)}
+          >
+            {item.label}
+          </button>
+        ))}
+        {usesPlatform ? (
+          <div className="ml-auto w-36">
+            <Select aria-label="平台" value={platform} onChange={(value) => setPlatform(value as MaoyanPlatform)} options={MAOYAN_PLATFORMS} />
+          </div>
+        ) : null}
+      </div>
+      {loading && !data ? (
+        <LoadingState label="正在获取猫眼榜单" />
+      ) : error ? (
+        <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/5 p-4 text-sm">
+          <p>{error}</p>
+          <Button variant="outline" className="h-8 px-3" onClick={() => void load(true)}>重试</Button>
+        </div>
+      ) : data && data.items.length > 0 ? (
+        <ol className={cn("grid gap-3 md:grid-cols-2 xl:grid-cols-3", loading && "opacity-60")}>
+          {data.items.map((item) => (
+            <li key={`${item.rank}:${item.title}`} className="flex gap-3 rounded-xl border border-border bg-card p-3">
+              <div className="relative w-16 shrink-0">
+                <Poster path={item.tmdb?.poster_path} title={item.title} />
+                <span className="absolute left-1 top-1 rounded-md bg-background/90 px-1.5 text-xs font-semibold tabular-nums">{item.rank}</span>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <h4 className="line-clamp-2 text-sm font-semibold">{item.title}</h4>
+                <p className="mt-1 truncate text-xs text-muted">
+                  {[item.platform, item.release_info].filter(Boolean).join(" · ") || "\u00a0"}
+                </p>
+                {item.metric ? <p className="mt-0.5 text-xs tabular-nums text-muted">{item.metric}</p> : null}
+                <div className="mt-auto flex items-end justify-between gap-2 pt-2">
+                  <span className="truncate text-xs text-muted">
+                    {item.tmdb ? `TMDB：${item.tmdb.title}${item.tmdb.year ? ` (${item.tmdb.year})` : ""}` : "未匹配到 TMDB"}
+                  </span>
+                  {item.tmdb ? (
+                    <Button className="h-8 shrink-0 px-3" onClick={() => onSubscribe(item.tmdb as TmdbMedia)}>
+                      <Plus data-icon="inline-start" />订阅
+                    </Button>
+                  ) : (
+                    <Button variant="outline" className="h-8 shrink-0 px-3" onClick={() => onSearchTitle(item.title, chartMeta.type)}>
+                      <Search data-icon="inline-start" />搜索
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <EmptyState icon={Film} title="榜单暂无数据" />
+      )}
+    </section>
   );
 }
 

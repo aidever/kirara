@@ -939,12 +939,9 @@ export function InviteProfilePage() {
   return (
     <div className="space-y-4">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">求药 / 发药</h1>
-          <p className="mt-1 text-sm leading-6 text-muted">
-            出示站点 UID，或粘贴对方求药信息逐条核验。
-          </p>
-        </div>
+        <p className="min-w-0 text-sm leading-6 text-muted">
+          出示站点 UID，或粘贴对方求药信息逐条核验。
+        </p>
         <div
           role="tablist"
           aria-label="求药发药"

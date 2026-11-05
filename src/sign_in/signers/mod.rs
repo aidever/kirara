@@ -33,7 +33,12 @@ pub(super) trait Signer: Send + Sync {
         settings: &'a GlobalConfig,
     ) -> Pin<Box<dyn Future<Output = Result<SignInOutput, String>> + Send + 'a>> {
         Box::pin(async move {
-            let profile = self.profile(config);
+            let mut profile = self.profile(config);
+            // A path the operator customised always wins; otherwise the preset's own
+            // path (e.g. OpenCD's /plugin_sign-in.php) or the NexusPHP default is used.
+            if let Some(custom) = custom_attendance_path(&config.attendance_path) {
+                profile.browserless.attendance_path = custom.to_string();
+            }
             if profile.browser == SIGN_IN_BROWSER_LIGHTPANDA {
                 let endpoint = build_lightpanda_endpoint(
                     &settings.lightpanda,
@@ -43,6 +48,7 @@ pub(super) trait Signer: Send + Sync {
                     endpoint,
                     base_url,
                     cookie,
+                    profile.browserless.attendance_path.clone(),
                     profile.sign_in_method.into(),
                     settings
                         .effective_proxy(settings.use_global_proxy_for_lightpanda)
@@ -62,6 +68,12 @@ pub(super) trait Signer: Send + Sync {
             }
         })
     }
+}
+
+/// Returns the operator's attendance path when it differs from the default.
+pub(super) fn custom_attendance_path(path: &str) -> Option<&str> {
+    let path = path.trim();
+    (!path.is_empty() && path != DEFAULT_ATTENDANCE_PATH).then_some(path)
 }
 
 pub(super) fn known(base_url: &str) -> Option<Box<dyn Signer>> {
@@ -350,4 +362,21 @@ mod tests {
         assert_eq!(baozi.browserless.already_keywords, "签到成功");
         assert_eq!(baozi.browserless.submit_method, "click");
     }
+
+    #[test]
+    fn only_a_customised_attendance_path_overrides_presets() {
+        assert_eq!(custom_attendance_path("/attendance.php"), None);
+        assert_eq!(custom_attendance_path("  "), None);
+        assert_eq!(
+            custom_attendance_path(" /sign_in.php?act=1 "),
+            Some("/sign_in.php?act=1")
+        );
+        assert_eq!(attendance_url("https://pt.example/", "/sign.php"), "https://pt.example/sign.php");
+        assert_eq!(attendance_url("https://pt.example", ""), "https://pt.example/attendance.php");
+        assert!(validate_attendance_path("/plugin_sign-in.php?cmd=signin").is_ok());
+        assert!(validate_attendance_path("https://evil.example/x").is_err());
+        assert!(validate_attendance_path("//evil.example/x").is_err());
+        assert!(validate_attendance_path("/a b").is_err());
+    }
+
 }
