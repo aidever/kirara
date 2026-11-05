@@ -2815,7 +2815,15 @@ impl Database {
             .map_err(sql_error)?;
 
             conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS media_settings (
+                "CREATE TABLE IF NOT EXISTS maoyan_charts (
+                    chart TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY (chart, platform)
+                );
+
+                CREATE TABLE IF NOT EXISTS media_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     tmdb_token TEXT,
                     tmdb_language TEXT NOT NULL DEFAULT 'zh-CN',

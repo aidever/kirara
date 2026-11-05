@@ -430,6 +430,7 @@ fn media_router(
         )
         .route("/tmdb/search", get(search_tmdb_media))
         .route("/maoyan", get(get_maoyan_rank))
+        .route("/maoyan/refresh", post(refresh_maoyan_rank))
         .route("/tmdb/details", get(get_tmdb_details_query))
         .route("/tmdb/season", get(get_tmdb_season_query))
         .route("/tmdb/{media_type}/{id}", get(get_tmdb_details_path))
@@ -1481,14 +1482,12 @@ struct MaoyanRankQuery {
     platform: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
-    #[serde(default)]
-    refresh: Option<bool>,
 }
 
 async fn get_maoyan_rank(
     State(state): State<MediaApiState>,
     Query(query): Query<MaoyanRankQuery>,
-) -> Result<Json<crate::media::maoyan::MaoyanRankResponse>, ApiError> {
+) -> Result<Json<crate::media::maoyan::MaoyanRankView>, ApiError> {
     use crate::media::maoyan::{MaoyanChart, MaoyanPlatform};
     let chart = MaoyanChart::parse(&query.chart).ok_or_else(|| {
         ApiError::bad_request("chart must be movie, web_movie, tv, web_series, or variety")
@@ -1498,15 +1497,15 @@ async fn get_maoyan_rank(
     Ok(Json(
         state
             .service
-            .maoyan_rank(
-                chart,
-                platform,
-                query.limit.unwrap_or(20),
-                query.refresh.unwrap_or(false),
-            )
-            .await
-            .map_err(ApiError::from)?,
+            .maoyan_rank(chart, platform, query.limit.unwrap_or(20))
+            .await,
     ))
+}
+
+/// 在后台刷新全部猫眼榜单，立即返回；刷新期间读取接口仍返回旧数据。
+async fn refresh_maoyan_rank(State(state): State<MediaApiState>) -> Json<serde_json::Value> {
+    let refreshing = state.service.spawn_maoyan_refresh();
+    Json(serde_json::json!({ "refreshing": refreshing }))
 }
 
 async fn search_tmdb_media(
@@ -5633,7 +5632,6 @@ impl From<MediaServiceError> for ApiError {
             }
             MediaServiceError::Serialization(_) => Self::internal("failed to serialize media data"),
             MediaServiceError::Downloader(_) => Self::bad_gateway("downloader request failed"),
-            MediaServiceError::Upstream(message) => Self::bad_gateway(message),
         }
     }
 }

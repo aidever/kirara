@@ -17,6 +17,47 @@ use crate::media::progression::{
 };
 
 impl Database {
+    /// 猫眼榜单快照（每个榜单/平台一行，payload 为序列化后的榜单）。
+    pub async fn list_maoyan_charts(&self) -> Result<Vec<String>, AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            let mut statement = conn
+                .prepare("SELECT payload FROM maoyan_charts")
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(sql_error)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(sql_error)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    pub async fn save_maoyan_chart(
+        &self,
+        chart: String,
+        platform: String,
+        payload: String,
+        fetched_at: String,
+    ) -> Result<(), AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            conn.execute(
+                "INSERT INTO maoyan_charts (chart, platform, payload, fetched_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(chart, platform) DO UPDATE SET
+                    payload = excluded.payload, fetched_at = excluded.fetched_at",
+                params![chart, platform, payload, fetched_at],
+            )
+            .map_err(sql_error)?;
+            Ok(())
+        })
+        .await
+        .map_err(join_error)?
+    }
+
     pub async fn get_media_settings(&self) -> Result<MediaSettings, AppError> {
         let path = self.path.clone();
         tokio::task::spawn_blocking(move || {

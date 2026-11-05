@@ -19,7 +19,7 @@ use super::domain::{
     ReleaseInfo, ReleaseParser, SearchCriteria, SeasonEpisode, SortKey, stable_release_key,
 };
 use super::lease::process_owner_id;
-use super::maoyan::{self, MaoyanCache, MaoyanChart, MaoyanPlatform, MaoyanRankResponse};
+use super::maoyan::{self, MaoyanChart, MaoyanPlatform, MaoyanRankResponse, MaoyanRankView, MaoyanStore};
 use super::models::{
     MEDIA_DOWNLOAD_RECONCILIATION_GRACE_SECONDS, MediaDownloadCoverage, MediaDownloadDeleteOutcome,
     MediaDownloadDeletion, MediaDownloadRecord, NewMediaDownload, NewSubscription,
@@ -63,8 +63,6 @@ pub enum MediaServiceError {
     Serialization(String),
     #[error("downloader error: {0}")]
     Downloader(String),
-    #[error("{0}")]
-    Upstream(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,7 +158,7 @@ pub struct MediaService {
     downloaders: Arc<DownloaderClientPool>,
     parser: ReleaseParser,
     candidate_cache: Arc<tokio::sync::Mutex<CandidateCache>>,
-    maoyan_cache: Arc<MaoyanCache>,
+    maoyan: Arc<MaoyanStore>,
 }
 
 #[derive(Clone)]
@@ -242,70 +240,205 @@ impl MediaService {
             downloaders,
             parser: ReleaseParser::default(),
             candidate_cache: Arc::new(tokio::sync::Mutex::new(CandidateCache::default())),
-            maoyan_cache: Arc::new(MaoyanCache::default()),
+            maoyan: Arc::new(MaoyanStore::default()),
         })
     }
 
-    /// 猫眼榜单（带 30 分钟缓存），并为每个条目匹配 TMDB，便于直接订阅。
+    async fn ensure_maoyan_loaded(&self) {
+        let db = self.db.clone();
+        self.maoyan
+            .load_once(|| async move {
+                match db.list_maoyan_charts().await {
+                    Ok(rows) => rows
+                        .into_iter()
+                        .filter_map(|row| serde_json::from_str::<MaoyanRankResponse>(&row).ok())
+                        .collect(),
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to load maoyan chart snapshots");
+                        Vec::new()
+                    }
+                }
+            })
+            .await;
+    }
+
+    /// 猫眼榜单：直接返回后台刷新得到的最新快照，不在请求内抓取。
+    /// 该榜单尚无数据且后台未在刷新时，会触发一次后台刷新，前端轮询等待。
     pub async fn maoyan_rank(
         &self,
         chart: MaoyanChart,
         platform: MaoyanPlatform,
         limit: usize,
-        refresh: bool,
-    ) -> Result<MaoyanRankResponse, MediaServiceError> {
-        let limit = limit.clamp(1, maoyan::MAOYAN_MAX_LIMIT);
-        if !refresh
-            && let Some(mut cached) = self.maoyan_cache.get(chart, platform).await
-            && cached.items.len() >= limit
-        {
-            cached.items.truncate(limit);
-            return Ok(cached);
-        }
-        let settings = self.db.get_settings().await?;
-        let http = client_factory::build_client(settings.proxy.as_deref())?;
-        let mut show_date = maoyan::show_date();
-        let mut payload = maoyan::fetch_chart_payload(
-            &http,
-            &settings,
-            chart,
-            &maoyan::chart_url(chart, platform, &show_date),
-        )
-        .await
-        .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
-        if let Some(latest) = maoyan::latest_available_date(&payload)
-            && latest != show_date
-        {
-            show_date = latest;
-            payload = maoyan::fetch_chart_payload(
-                &http,
-                &settings,
-                chart,
-                &maoyan::chart_url(chart, platform, &show_date),
-            )
-            .await
-            .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
-        }
-        let mut items = maoyan::parse_chart(chart, &payload, maoyan::MAOYAN_MAX_LIMIT)
-            .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
-        if let Ok(client) = self.tmdb_client().await {
-            maoyan::attach_tmdb(&mut items, chart.media_type(), |query, media_type| {
-                let client = client.clone();
-                async move { client.search(&query, Some(media_type.as_str())).await.ok() }
-            })
-            .await;
-        }
-        let response = MaoyanRankResponse {
-            chart,
-            platform,
-            show_date,
-            fetched_at: Utc::now().to_rfc3339(),
-            items,
+    ) -> MaoyanRankView {
+        self.ensure_maoyan_loaded().await;
+        let platform = if chart.platforms().contains(&platform) {
+            platform
+        } else {
+            MaoyanPlatform::All
         };
-        self.maoyan_cache.put(response.clone()).await;
-        let mut response = response;
-        response.items.truncate(limit);
-        Ok(response)
+        let limit = limit.clamp(1, maoyan::MAOYAN_MAX_LIMIT);
+        let mut view = self.maoyan.view(chart, platform, limit).await;
+        if view.fetched_at.is_none() && !view.refreshing && view.error.is_none() {
+            view.refreshing = self.spawn_maoyan_refresh();
+        }
+        view
+    }
+
+    /// 在后台刷新全部猫眼榜单；已有刷新在进行时不重复启动。返回刷新是否在进行。
+    pub fn spawn_maoyan_refresh(&self) -> bool {
+        if self.maoyan.is_refreshing() {
+            return true;
+        }
+        let service = self.clone();
+        tokio::spawn(async move {
+            service.refresh_maoyan().await;
+        });
+        true
+    }
+
+    /// 周期性刷新猫眼榜单（启动后稍作延迟，数据过期才抓取）。
+    pub fn spawn_maoyan_refresher(&self) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(StdDuration::from_secs(20)).await;
+            loop {
+                service.ensure_maoyan_loaded().await;
+                if service.maoyan.is_stale().await {
+                    service.refresh_maoyan().await;
+                }
+                tokio::time::sleep(StdDuration::from_secs(5 * 60)).await;
+            }
+        });
+    }
+
+    async fn refresh_maoyan(&self) {
+        self.ensure_maoyan_loaded().await;
+        let Some(_guard) = self.maoyan.try_begin_refresh() else {
+            return;
+        };
+        self.maoyan.mark_attempt().await;
+        let started = Instant::now();
+        let settings = match self.db.get_settings().await {
+            Ok(settings) => settings,
+            Err(error) => {
+                tracing::warn!(%error, "maoyan refresh skipped: settings unavailable");
+                return;
+            }
+        };
+        let http = match client_factory::build_client(settings.proxy.as_deref()) {
+            Ok(http) => http,
+            Err(error) => {
+                tracing::warn!(%error, "maoyan refresh skipped: http client unavailable");
+                return;
+            }
+        };
+        let show_date = maoyan::show_date();
+        let mut payloads: Vec<(MaoyanChart, MaoyanPlatform, String, Result<serde_json::Value, String>)> =
+            Vec::new();
+
+        // 票房榜可直接请求。
+        let movie_url = maoyan::chart_url(MaoyanChart::Movie, MaoyanPlatform::All, &show_date);
+        let movie = maoyan::fetch_chart_payload(&http, &settings, MaoyanChart::Movie, &movie_url)
+            .await
+            .map_err(|error| error.to_string());
+        payloads.push((MaoyanChart::Movie, MaoyanPlatform::All, show_date.clone(), movie));
+
+        // 热度榜在同一个浏览器页面里批量获取，避免每个榜单都启动一次浏览器。
+        let heat_keys: Vec<(MaoyanChart, MaoyanPlatform)> = MaoyanChart::ALL
+            .into_iter()
+            .filter(|chart| chart.needs_browser())
+            .flat_map(|chart| chart.platforms().iter().map(move |platform| (chart, *platform)))
+            .collect();
+        let heat = fetch_heat_batch(&settings, &heat_keys, |_| show_date.clone()).await;
+        let mut retry = Vec::new();
+        for ((chart, platform), result) in heat_keys.iter().copied().zip(heat) {
+            // 网络电影当日数据未生成时，改用最近可用日期重新获取。
+            if let Ok(payload) = &result
+                && let Some(latest) = maoyan::latest_available_date(payload)
+                && latest != show_date
+            {
+                retry.push(((chart, platform), latest));
+                continue;
+            }
+            payloads.push((chart, platform, show_date.clone(), result));
+        }
+        if !retry.is_empty() {
+            let keys: Vec<_> = retry.iter().map(|(key, _)| *key).collect();
+            let dates: HashMap<_, _> = retry.into_iter().collect();
+            let results = fetch_heat_batch(&settings, &keys, |key| dates[key].clone()).await;
+            for (key, result) in keys.iter().copied().zip(results) {
+                payloads.push((key.0, key.1, dates[&key].clone(), result));
+            }
+        }
+
+        let tmdb = self.tmdb_client().await.ok();
+        let mut succeeded = 0usize;
+        for (chart, platform, date, result) in payloads {
+            let items = result.and_then(|payload| {
+                maoyan::parse_chart(chart, &payload, maoyan::MAOYAN_MAX_LIMIT)
+                    .map_err(|error| error.to_string())
+            });
+            let mut items = match items {
+                Ok(items) if !items.is_empty() => items,
+                Ok(_) => {
+                    self.maoyan
+                        .set_error(chart, platform, "猫眼返回的榜单为空".to_string())
+                        .await;
+                    continue;
+                }
+                Err(error) => {
+                    tracing::debug!(chart = chart.as_str(), platform = platform.as_str(), %error, "maoyan chart refresh failed");
+                    self.maoyan.set_error(chart, platform, error).await;
+                    continue;
+                }
+            };
+            if let Some(client) = &tmdb {
+                let store = &self.maoyan;
+                maoyan::attach_tmdb(&mut items, chart.media_type(), |query, media_type| {
+                    let client = client.clone();
+                    async move {
+                        if let Some(cached) = store.cached_tmdb(&query, &media_type).await {
+                            return Some(cached);
+                        }
+                        let results = client.search(&query, Some(media_type.as_str())).await.ok()?;
+                        store.store_tmdb(query, &media_type, results.clone()).await;
+                        Some(results)
+                    }
+                })
+                .await;
+            }
+            let response = MaoyanRankResponse {
+                chart,
+                platform,
+                show_date: date,
+                fetched_at: Utc::now().to_rfc3339(),
+                items,
+            };
+            match serde_json::to_string(&response) {
+                Ok(payload) => {
+                    if let Err(error) = self
+                        .db
+                        .save_maoyan_chart(
+                            chart.as_str().to_string(),
+                            platform.as_str().to_string(),
+                            payload,
+                            response.fetched_at.clone(),
+                        )
+                        .await
+                    {
+                        tracing::warn!(%error, "failed to persist maoyan chart");
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to serialize maoyan chart"),
+            }
+            self.maoyan.put(response).await;
+            succeeded += 1;
+        }
+        tracing::info!(
+            succeeded,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "maoyan charts refreshed"
+        );
     }
 
     pub fn database(&self) -> &Database {
@@ -2278,6 +2411,30 @@ impl MediaService {
         let proxy = self.db.get_settings().await?.proxy;
         let client = client_factory::build_client(proxy.as_deref())?;
         TmdbClient::new(client, token, media.tmdb_language).map_err(Into::into)
+    }
+}
+
+async fn fetch_heat_batch<F>(
+    settings: &crate::config::GlobalConfig,
+    keys: &[(MaoyanChart, MaoyanPlatform)],
+    date_for: F,
+) -> Vec<Result<serde_json::Value, String>>
+where
+    F: Fn(&(MaoyanChart, MaoyanPlatform)) -> String,
+{
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let urls: Vec<String> = keys
+        .iter()
+        .map(|key| maoyan::chart_url(key.0, key.1, &date_for(key)))
+        .collect();
+    match maoyan::fetch_chart_payloads_in_browser(settings, &urls).await {
+        Ok(results) => results,
+        Err(error) => {
+            let message = error.to_string();
+            keys.iter().map(|_| Err(message.clone())).collect()
+        }
     }
 }
 

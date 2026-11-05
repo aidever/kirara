@@ -237,6 +237,7 @@ async fn run(
     let mut rss_scheduler_handle = tokio::spawn(async move {
         rss_scheduler_ref.start().await;
     });
+    media_service.spawn_maoyan_refresher();
     let media_scheduler_ref = media_scheduler.clone();
     let mut media_scheduler_handle = tokio::spawn(async move {
         media_scheduler_ref.start().await;

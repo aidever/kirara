@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
+  TrendingUp,
   Tv,
   X,
 } from "lucide-react";
@@ -63,7 +64,7 @@ import { cn } from "@/lib/utils";
 import { FilterChips, FilterSummary, Highlight, SearchBox, SortableHead } from "@/components/list-controls";
 import { compareValues, matchesQuery, oneOf, usePageState, useSortState } from "@/lib/page-state";
 
-const MEDIA_MODES = ["subscriptions", "tmdb", "resources", "settings"] as const;
+const MEDIA_MODES = ["subscriptions", "tmdb", "charts", "resources", "settings"] as const;
 type MediaMode = typeof MEDIA_MODES[number];
 const SETTINGS_SECTIONS = ["media", "quality", "openlist"] as const;
 const SETTINGS_LABELS = { media: "媒体设置", quality: "质量配置", openlist: "OpenList" };
@@ -543,6 +544,7 @@ const QUALITY_PRESETS: Array<{
 const MODES: Array<{ value: MediaMode; label: string; icon: typeof Tv }> = [
   { value: "subscriptions", label: "订阅", icon: Tv },
   { value: "tmdb", label: "添加影视", icon: Plus },
+  { value: "charts", label: "猫眼榜单", icon: TrendingUp },
   { value: "resources", label: "资源搜索", icon: Search },
   { value: "settings", label: "质量与设置", icon: SlidersHorizontal },
 ];
@@ -2149,7 +2151,7 @@ export function MediaPage() {
         </Button>
       </header>
 
-      <div className="grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface-container p-1 lg:grid-cols-4" role="tablist" aria-label="自动追剧模式">
+      <div className="grid grid-cols-3 gap-1 rounded-xl border border-border bg-surface-container p-1 sm:grid-cols-5" role="tablist" aria-label="自动追剧模式">
         {MODES.map((item) => {
           const Icon = item.icon;
           const active = mode === item.value;
@@ -2258,17 +2260,24 @@ export function MediaPage() {
           }}
           onSearch={searchTmdb}
           onSubscribe={(media) => void openSubscriptionDialog(media)}
-          onSearchTitle={(title, type) => {
-            setTmdbQuery(title);
-            setTmdbType(type);
-            void searchTmdb(undefined, type, title);
-          }}
           onClearSearch={() => {
             tmdbSearchGeneration.current += 1;
             setTmdbLoading(false);
             setTmdbQuery("");
             setTmdbResults([]);
             setTmdbSearched(false);
+          }}
+          onOpenCharts={() => setMode("charts")}
+        />
+      ) : mode === "charts" ? (
+        <MaoyanRankSection
+          onSubscribe={(media) => void openSubscriptionDialog(media)}
+          onSearchTitle={(title, type) => {
+            // 未匹配到 TMDB 的条目转到“添加影视”手动搜索。
+            setMode("tmdb");
+            setTmdbQuery(title);
+            setTmdbType(type);
+            void searchTmdb(undefined, type, title);
           }}
         />
       ) : mode === "resources" ? (
@@ -3997,8 +4006,8 @@ function TmdbPanel({
   onMediaTypeChange,
   onSearch,
   onSubscribe,
-  onSearchTitle,
   onClearSearch,
+  onOpenCharts,
 }: {
   query: string;
   mediaType: "multi" | MediaType;
@@ -4009,8 +4018,8 @@ function TmdbPanel({
   onMediaTypeChange: (value: string) => void;
   onSearch: (event: FormEvent) => void;
   onSubscribe: (media: TmdbMedia) => void;
-  onSearchTitle: (title: string, type: MediaType) => void;
   onClearSearch: () => void;
+  onOpenCharts: () => void;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -4048,7 +4057,7 @@ function TmdbPanel({
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold">搜索结果 <span className="ml-1 text-xs font-normal text-muted">{results.length} 项</span></h3>
             <Button variant="outline" className="h-8 px-3" onClick={onClearSearch}>
-              <X data-icon="inline-start" />返回榜单
+              <X data-icon="inline-start" />清除搜索
             </Button>
           </div>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -4079,9 +4088,14 @@ function TmdbPanel({
           </div>
         </section>
       ) : searched ? (
-        <EmptyState icon={Film} title="没有找到匹配影视" action={{ label: "返回榜单", onClick: onClearSearch }} />
+        <EmptyState icon={Film} title="没有找到匹配影视" action={{ label: "清除搜索", onClick: onClearSearch }} />
       ) : (
-        <MaoyanRankSection onSubscribe={onSubscribe} onSearchTitle={onSearchTitle} />
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border p-4 text-sm text-muted">
+          <span>不知道追什么？看看猫眼榜单上的热门影视。</span>
+          <Button variant="outline" className="h-8 px-3" onClick={onOpenCharts}>
+            <TrendingUp data-icon="inline-start" />猫眼榜单
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -4097,7 +4111,14 @@ type MaoyanRankItem = {
   metric: string | null;
   tmdb: TmdbMedia | null;
 };
-type MaoyanRankResponse = { chart: MaoyanChart; show_date: string; items: MaoyanRankItem[] };
+type MaoyanRankResponse = {
+  chart: MaoyanChart;
+  show_date: string | null;
+  fetched_at: string | null;
+  items: MaoyanRankItem[];
+  refreshing: boolean;
+  error: string | null;
+};
 
 const MAOYAN_CHARTS: { value: MaoyanChart; label: string; type: MediaType }[] = [
   { value: "movie", label: "实时票房", type: "movie" },
@@ -4113,6 +4134,14 @@ const MAOYAN_PLATFORMS: { value: MaoyanPlatform; label: string }[] = [
   { value: "youku", label: "优酷" },
   { value: "mango", label: "芒果TV" },
 ];
+const MAOYAN_POLL_MS = 3000;
+
+function formatFetchedAt(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
 
 function MaoyanRankSection({
   onSubscribe,
@@ -4126,41 +4155,71 @@ function MaoyanRankSection({
   const [data, setData] = useState<MaoyanRankResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [requesting, setRequesting] = useState(false);
   const generation = useRef(0);
   const chartMeta = MAOYAN_CHARTS.find((item) => item.value === chart) ?? MAOYAN_CHARTS[0];
   const usesPlatform = chart !== "movie";
+  const query = `chart=${chart}&platform=${usesPlatform ? platform : "all"}&limit=20`;
 
-  const load = useCallback(async (refresh = false) => {
+  // 读取接口只返回后台快照，不会等待抓取；切换榜单时清空，避免误显示上一个榜单。
+  const load = useCallback(async (silent = false) => {
     const current = ++generation.current;
-    setLoading(true);
-    setError("");
+    if (!silent) setLoading(true);
     try {
-      const params = new URLSearchParams({ chart, platform: usesPlatform ? platform : "all", limit: "20" });
-      if (refresh) params.set("refresh", "true");
-      const payload = await api<MaoyanRankResponse>(`/api/media/maoyan?${params.toString()}`);
-      if (current === generation.current) setData(payload);
-    } catch (loadError) {
+      const payload = await api<MaoyanRankResponse>(`/api/media/maoyan?${query}`);
       if (current !== generation.current) return;
-      setData(null);
-      setError(describeUnknown(loadError));
+      setData(payload);
+      setError("");
+    } catch (loadError) {
+      if (current === generation.current) setError(describeUnknown(loadError));
     } finally {
       if (current === generation.current) setLoading(false);
     }
-  }, [chart, platform, usesPlatform]);
+  }, [query]);
 
   useEffect(() => {
+    setData(null);
+    setError("");
     void load();
   }, [load]);
+
+  // 后台刷新期间轮询，刷新完成后自动换成新数据；旧数据在此期间照常展示。
+  const refreshing = Boolean(data?.refreshing);
+  useEffect(() => {
+    if (!refreshing) return;
+    const timer = window.setInterval(() => void load(true), MAOYAN_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshing, load]);
+
+  const refresh = async () => {
+    setRequesting(true);
+    try {
+      await api<{ refreshing: boolean }>("/api/media/maoyan/refresh", { method: "POST" });
+      await load(true);
+    } catch (refreshError) {
+      setError(describeUnknown(refreshError));
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  const hasItems = Boolean(data && data.items.length > 0);
+  const fetchedAt = formatFetchedAt(data?.fetched_at);
+  const busy = refreshing || requesting;
 
   return (
     <section aria-label="猫眼榜单" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold">猫眼榜单</h3>
-          <p className="text-xs text-muted">看看大家在看什么，点“订阅”即可追更。{data?.show_date ? ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}` : ""}</p>
+          <p className="text-xs text-muted">
+            看看大家在看什么，点“订阅”即可追更。
+            {data?.show_date ? ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}` : ""}
+            {fetchedAt ? ` · 更新于 ${fetchedAt}` : ""}
+          </p>
         </div>
-        <Button variant="outline" className="h-8 px-3" disabled={loading} onClick={() => void load(true)}>
-          <RefreshCw className={cn(loading && "animate-spin")} data-icon="inline-start" />刷新
+        <Button variant="outline" className="h-8 px-3" disabled={busy} onClick={() => void refresh()}>
+          <RefreshCw className={cn(busy && "animate-spin")} data-icon="inline-start" />{busy ? "后台刷新中" : "刷新"}
         </Button>
       </div>
       <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="榜单类型">
@@ -4185,15 +4244,11 @@ function MaoyanRankSection({
           </div>
         ) : null}
       </div>
-      {loading && !data ? (
-        <LoadingState label="正在获取猫眼榜单" />
-      ) : error ? (
-        <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/5 p-4 text-sm">
-          <p>{error}</p>
-          <Button variant="outline" className="h-8 px-3" onClick={() => void load(true)}>重试</Button>
-        </div>
-      ) : data && data.items.length > 0 ? (
-        <ol className={cn("grid gap-3 md:grid-cols-2 xl:grid-cols-3", loading && "opacity-60")}>
+      {hasItems && data?.error && !refreshing ? (
+        <p role="status" className="text-xs text-muted">最近一次刷新失败，当前显示的是上次的数据：{data.error}</p>
+      ) : null}
+      {hasItems && data ? (
+        <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {data.items.map((item) => (
             <li key={`${item.rank}:${item.title}`} className="flex gap-3 rounded-xl border border-border bg-card p-3">
               <div className="relative w-16 shrink-0">
@@ -4224,6 +4279,13 @@ function MaoyanRankSection({
             </li>
           ))}
         </ol>
+      ) : loading || busy || (data === null && !error) ? (
+        <LoadingState label={busy ? "首次获取猫眼榜单，可能需要一点时间" : "正在读取猫眼榜单"} />
+      ) : error || data?.error ? (
+        <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/5 p-4 text-sm">
+          <p>{error || data?.error}</p>
+          <Button variant="outline" className="h-8 px-3" onClick={() => void (error ? load() : refresh())}>重试</Button>
+        </div>
       ) : (
         <EmptyState icon={Film} title="榜单暂无数据" />
       )}
