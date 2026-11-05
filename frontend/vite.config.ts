@@ -27,10 +27,10 @@ export default defineConfig({
     },
   },
   server: {
-    host: "0.0.0.0",
+    host: "::",
     allowedHosts: true,
     cors: true,
-    port: 1234,
+    port: 31234,
     strictPort: true,
     proxy: {
       "/dav/ptd": {
@@ -44,8 +44,8 @@ export default defineConfig({
     },
   },
   preview: {
-    host: "0.0.0.0",
-    port: 1234,
+    host: "::",
+    port: 31234,
     strictPort: true,
     allowedHosts: true,
     cors: true,

@@ -4,7 +4,7 @@ const { fixture, responder, noOverflow } = require('./rss.browser.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const url = process.env.RSS_TEST_URL || 'http://localhost:1234';
+const url = process.env.RSS_TEST_URL || 'http://localhost:31234';
 const output = path.resolve('.impeccable/review/rss-redesign');
 (async () => {
   fs.mkdirSync(output, { recursive: true });

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage the local frontend (1234) and backend (3000) on Linux."""
+"""Manage the local frontend (31234) and backend (3000) on Linux."""
 import fcntl
 import json
 import os
@@ -79,8 +79,8 @@ def launch(state, name, command):
 
 
 def request(path, method='GET'):
-    req = urllib.request.Request('http://127.0.0.1:1234' + path, method=method,
-        headers={'Host': 'arbitrary-host.example:1234', 'Origin': 'https://arbitrary-origin.example',
+    req = urllib.request.Request('http://127.0.0.1:31234' + path, method=method,
+        headers={'Host': 'arbitrary-host.example:31234', 'Origin': 'https://arbitrary-origin.example',
                  'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'content-type'})
     with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=3) as response:
         if response.status not in (200, 204):
@@ -103,9 +103,9 @@ def check(state):
 def start(state):
     if any(alive(state.get(name)) for name in ('frontend', 'backend')):
         check(state)
-        print('服务已运行：http://localhost:1234')
+        print('服务已运行：http://localhost:31234')
         return
-    for port in (1234, 3000):
+    for port in (31234, 3000):
         ensure_port_free(port)
     data_dir = str(Path(os.environ.get('KIRARA_DATA_DIR') or state.get('data_dir') or ROOT / 'data').resolve())
     state.clear()
@@ -134,7 +134,7 @@ def start(state):
     except BaseException:
         stop(state)
         raise
-    print(f'已启动：http://localhost:1234（监听 0.0.0.0，允许任意来源）\n数据：{data_dir}\n日志：{RUNTIME}')
+    print(f'已启动：http://localhost:31234（监听所有 IPv4/IPv6 地址，允许任意来源）\n数据：{data_dir}\n日志：{RUNTIME}')
 
 
 def main():
@@ -154,7 +154,7 @@ def main():
             for name in ('frontend', 'backend'):
                 print(f'{name}: {"运行中" if alive(state.get(name)) else "已停止"}')
             check(state)
-            print('页面、API 代理、任意 Host / Origin 检查通过：http://localhost:1234')
+            print('页面、API 代理、任意 Host / Origin 检查通过：http://localhost:31234')
     return 0
 
 

@@ -7,10 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Web dev server rules (from AGENTS.md — mandatory)
 
 - Manage dev services only via `./dev.sh start|stop|restart|status` from the repo root (wraps `scripts/dev.py`; manages both backend and frontend). `KIRARA_DATA_DIR=/path ./dev.sh start` picks a data dir (default `data/`); restarts reuse it. Logs: `.dev/frontend.log`, `.dev/backend.log`.
-- The web UI always listens on `0.0.0.0:1234`; the backend on `127.0.0.1:3000`, reached through the Vite proxy (`/api`, `/dav/ptd`).
-- Port 1234 must accept any origin. Both `server` and `preview` in `frontend/vite.config.ts` must keep `host: "0.0.0.0"`, `allowedHosts: true`, `cors: true`, `strictPort: true`. Never add Host/Origin allowlists. If the port is busy, inspect the existing service; don't switch ports.
+- The web UI always listens on `[::]:31234` (all IPv4 and IPv6 addresses); the backend on `127.0.0.1:3000`, reached through the Vite proxy (`/api`, `/dav/ptd`).
+- Port 31234 must accept any origin. Both `server` and `preview` in `frontend/vite.config.ts` must keep `host: "::"`, `allowedHosts: true`, `cors: true`, `strictPort: true`. Never add Host/Origin allowlists. If the port is busy, inspect the existing service; don't switch ports.
 - Frontend is started from the repo root with `npm --prefix frontend run dev` (preview: `npm --prefix frontend run preview`).
-- After starting, verify the page and the `/api` proxy work, and check that a custom Host header and a cross-origin Origin are not blocked. Then give the user `http://<machine address>:1234` (`http://localhost:1234` locally).
+- After starting, verify the page and the `/api` proxy work, and check that a custom Host header and a cross-origin Origin are not blocked. Then give the user `http://<machine address>:31234` (`http://localhost:31234` locally).
 - These rules cover the web UI only. Tauri desktop dev uses its own configured address and port.
 
 ## Commands
