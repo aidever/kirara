@@ -431,6 +431,7 @@ fn media_router(
         .route("/tmdb/search", get(search_tmdb_media))
         .route("/maoyan", get(get_maoyan_rank))
         .route("/maoyan/refresh", post(refresh_maoyan_rank))
+        .route("/douban/poster", get(get_douban_poster))
         .route("/tmdb/details", get(get_tmdb_details_query))
         .route("/tmdb/season", get(get_tmdb_season_query))
         .route("/tmdb/{media_type}/{id}", get(get_tmdb_details_path))
@@ -1500,6 +1501,26 @@ async fn get_maoyan_rank(
             .maoyan_rank(chart, platform, query.limit.unwrap_or(20))
             .await,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct DoubanPosterQuery {
+    id: String,
+}
+
+async fn get_douban_poster(
+    State(state): State<MediaApiState>,
+    Query(query): Query<DoubanPosterQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !crate::media::douban::is_poster_id(&query.id) {
+        return Err(ApiError::bad_request("invalid poster id"));
+    }
+    let data_url = state
+        .service
+        .douban_poster(&query.id)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(serde_json::json!({ "data_url": data_url })))
 }
 
 /// 在后台刷新全部猫眼榜单，立即返回；刷新期间读取接口仍返回旧数据。
@@ -5632,6 +5653,7 @@ impl From<MediaServiceError> for ApiError {
             }
             MediaServiceError::Serialization(_) => Self::internal("failed to serialize media data"),
             MediaServiceError::Downloader(_) => Self::bad_gateway("downloader request failed"),
+            MediaServiceError::Upstream(message) => Self::bad_gateway(message),
         }
     }
 }

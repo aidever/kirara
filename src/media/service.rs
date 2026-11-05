@@ -63,6 +63,8 @@ pub enum MediaServiceError {
     Serialization(String),
     #[error("downloader error: {0}")]
     Downloader(String),
+    #[error("{0}")]
+    Upstream(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +313,88 @@ impl MediaService {
         });
     }
 
+    /// 豆瓣海报（data URL），内存缓存最近 300 张。
+    pub async fn douban_poster(&self, id: &str) -> Result<String, MediaServiceError> {
+        if let Some(cached) = self.maoyan.cached_poster(id).await {
+            return Ok(cached);
+        }
+        let settings = self.db.get_settings().await?;
+        let client = client_factory::build_client(settings.proxy.as_deref())?;
+        let poster = super::douban::fetch_poster(&client, id)
+            .await
+            .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
+        self.maoyan.store_poster(id.to_string(), poster.clone()).await;
+        Ok(poster)
+    }
+
+    async fn resolve_maoyan_titles(
+        &self,
+        parsed: &[(MaoyanChart, MaoyanPlatform, String, Vec<maoyan::MaoyanRankItem>)],
+        settings: &crate::config::GlobalConfig,
+    ) -> HashMap<(String, &'static str), maoyan::MediaMatch> {
+        use futures::StreamExt;
+
+        let mut unique = Vec::new();
+        let mut seen = HashSet::new();
+        for (chart, _, _, items) in parsed {
+            for item in items {
+                if seen.insert((item.title.clone(), chart.media_type().as_str())) {
+                    unique.push((item.title.clone(), chart.media_type()));
+                }
+            }
+        }
+        let douban = match client_factory::build_client(settings.proxy.as_deref()) {
+            Ok(client) => super::douban::DoubanClient::new(client),
+            Err(error) => {
+                tracing::warn!(%error, "maoyan matching skipped: http client unavailable");
+                return HashMap::new();
+            }
+        };
+        let tmdb = self.tmdb_client().await.ok();
+        let store = &self.maoyan;
+        // 之前已匹配到 TMDB 的片名直接沿用（重启后也不必再请求豆瓣）；
+        // 本轮请求失败时也回退到之前的结果，避免刷新后反而丢失匹配。
+        let previous = store.previous_matches().await;
+        let previous = &previous;
+        let total = unique.len();
+        let results: Vec<_> = futures::stream::iter(unique)
+            .map(|(title, media_type)| {
+                let douban = &douban;
+                let tmdb = tmdb.as_ref();
+                async move {
+                    if let Some(found) = store.cached_match(&title, &media_type).await {
+                        return (title, media_type, found, true);
+                    }
+                    let earlier = previous.get(&(title.clone(), media_type.as_str()));
+                    if let Some(earlier) = earlier {
+                        store.store_match(title.clone(), &media_type, earlier.clone()).await;
+                        return (title, media_type, earlier.clone(), true);
+                    }
+                    let (found, reliable) =
+                        maoyan::resolve_media(&title, &media_type, douban, tmdb).await;
+                    if reliable {
+                        store.store_match(title.clone(), &media_type, found.clone()).await;
+                    }
+                    (title, media_type, found, reliable)
+                }
+            })
+            // 并发度只影响排队，实际速率由豆瓣 / TMDB 各自的全局队列控制。
+            .buffer_unordered(8)
+            .collect()
+            .await;
+        let unreliable = results.iter().filter(|(_, _, _, reliable)| !reliable).count();
+        let unmatched = results.iter().filter(|(_, _, found, _)| found.tmdb.is_none()).count();
+        if unreliable > 0 {
+            tracing::warn!(total, unreliable, unmatched, "some maoyan titles could not be matched due to request failures; they will be retried next refresh");
+        } else {
+            tracing::info!(total, unmatched, "maoyan titles matched");
+        }
+        results
+            .into_iter()
+            .map(|(title, media_type, found, _)| ((title, media_type.as_str()), found))
+            .collect()
+    }
+
     async fn refresh_maoyan(&self) {
         self.ensure_maoyan_loaded().await;
         let Some(_guard) = self.maoyan.try_begin_refresh() else {
@@ -371,41 +455,36 @@ impl MediaService {
             }
         }
 
-        let tmdb = self.tmdb_client().await.ok();
-        let mut succeeded = 0usize;
+        let mut parsed = Vec::new();
         for (chart, platform, date, result) in payloads {
             let items = result.and_then(|payload| {
                 maoyan::parse_chart(chart, &payload, maoyan::MAOYAN_MAX_LIMIT)
                     .map_err(|error| error.to_string())
             });
-            let mut items = match items {
-                Ok(items) if !items.is_empty() => items,
+            match items {
+                Ok(items) if !items.is_empty() => parsed.push((chart, platform, date, items)),
                 Ok(_) => {
                     self.maoyan
                         .set_error(chart, platform, "猫眼返回的榜单为空".to_string())
                         .await;
-                    continue;
                 }
                 Err(error) => {
                     tracing::debug!(chart = chart.as_str(), platform = platform.as_str(), %error, "maoyan chart refresh failed");
                     self.maoyan.set_error(chart, platform, error).await;
-                    continue;
                 }
-            };
-            if let Some(client) = &tmdb {
-                let store = &self.maoyan;
-                maoyan::attach_tmdb(&mut items, chart.media_type(), |query, media_type| {
-                    let client = client.clone();
-                    async move {
-                        if let Some(cached) = store.cached_tmdb(&query, &media_type).await {
-                            return Some(cached);
-                        }
-                        let results = client.search(&query, Some(media_type.as_str())).await.ok()?;
-                        store.store_tmdb(query, &media_type, results.clone()).await;
-                        Some(results)
-                    }
-                })
-                .await;
+            }
+        }
+
+        // 各榜单、各平台大量重名，按（片名, 类型）去重后统一匹配豆瓣 / TMDB。
+        let matches = self.resolve_maoyan_titles(&parsed, &settings).await;
+
+        let mut succeeded = 0usize;
+        for (chart, platform, date, mut items) in parsed {
+            for item in &mut items {
+                if let Some(found) = matches.get(&(item.title.clone(), chart.media_type().as_str())) {
+                    item.douban = found.douban.clone();
+                    item.tmdb = found.tmdb.clone();
+                }
             }
             let response = MaoyanRankResponse {
                 chart,

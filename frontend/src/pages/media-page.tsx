@@ -4109,8 +4109,51 @@ type MaoyanRankItem = {
   release_info: string | null;
   platform: string | null;
   metric: string | null;
+  douban?: DoubanSubject | null;
   tmdb: TmdbMedia | null;
 };
+type DoubanSubject = {
+  id: string;
+  title: string;
+  year: number | null;
+  rating: number | null;
+  poster_id: string | null;
+  url: string;
+};
+
+// 豆瓣图片有防盗链，由后端代取；同一张海报在会话内只请求一次。
+const doubanPosterCache = new Map<string, Promise<string | null>>();
+function loadDoubanPoster(id: string) {
+  let pending = doubanPosterCache.get(id);
+  if (!pending) {
+    pending = api<{ data_url: string }>(`/api/media/douban/poster?id=${encodeURIComponent(id)}`)
+      .then((payload) => payload.data_url)
+      .catch(() => {
+        doubanPosterCache.delete(id);
+        return null;
+      });
+    doubanPosterCache.set(id, pending);
+  }
+  return pending;
+}
+
+function RankPoster({ item }: { item: MaoyanRankItem }) {
+  const tmdbPoster = item.tmdb?.poster_path ?? null;
+  const doubanId = tmdbPoster ? null : item.douban?.poster_id ?? null;
+  const [doubanUrl, setDoubanUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setDoubanUrl(null);
+    if (!doubanId) return;
+    let active = true;
+    void loadDoubanPoster(doubanId).then((url) => {
+      if (active) setDoubanUrl(url);
+    });
+    return () => {
+      active = false;
+    };
+  }, [doubanId]);
+  return <Poster path={tmdbPoster ?? doubanUrl} title={item.title} />;
+}
 type MaoyanRankResponse = {
   chart: MaoyanChart;
   show_date: string | null;
@@ -4252,7 +4295,7 @@ function MaoyanRankSection({
           {data.items.map((item) => (
             <li key={`${item.rank}:${item.title}`} className="flex gap-3 rounded-xl border border-border bg-card p-3">
               <div className="relative w-16 shrink-0">
-                <Poster path={item.tmdb?.poster_path} title={item.title} />
+                <RankPoster item={item} />
                 <span className="absolute left-1 top-1 rounded-md bg-background/90 px-1.5 text-xs font-semibold tabular-nums">{item.rank}</span>
               </div>
               <div className="flex min-w-0 flex-1 flex-col">
@@ -4260,7 +4303,16 @@ function MaoyanRankSection({
                 <p className="mt-1 truncate text-xs text-muted">
                   {[item.platform, item.release_info].filter(Boolean).join(" · ") || "\u00a0"}
                 </p>
-                {item.metric ? <p className="mt-0.5 text-xs tabular-nums text-muted">{item.metric}</p> : null}
+                {item.metric || item.douban ? (
+                  <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs tabular-nums text-muted">
+                    {item.metric ? <span>{item.metric}</span> : null}
+                    {item.douban ? (
+                      <a className="underline-offset-4 hover:text-foreground hover:underline" href={item.douban.url} target="_blank" rel="noreferrer">
+                        {item.douban.rating ? `豆瓣 ${item.douban.rating.toFixed(1)}` : "豆瓣暂无评分"}
+                      </a>
+                    ) : null}
+                  </p>
+                ) : null}
                 <div className="mt-auto flex items-end justify-between gap-2 pt-2">
                   <span className="truncate text-xs text-muted">
                     {item.tmdb ? `TMDB：${item.tmdb.title}${item.tmdb.year ? ` (${item.tmdb.year})` : ""}` : "未匹配到 TMDB"}

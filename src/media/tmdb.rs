@@ -1,7 +1,40 @@
+use std::sync::LazyLock;
+use std::time::Duration;
+
 use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex, Semaphore};
+use tokio::time::Instant;
 
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
+
+/// TMDB 官方限制：单 IP 约 50 请求/秒、最多 20 个并发连接。
+/// 所有 TMDB 请求共用这个队列，留一些余量，避免批量匹配时被 429 拒绝。
+const TMDB_MAX_CONCURRENCY: usize = 16;
+const TMDB_MIN_INTERVAL: Duration = Duration::from_millis(25);
+const TMDB_MAX_ATTEMPTS: u32 = 4;
+
+static TMDB_CONCURRENCY: LazyLock<Semaphore> =
+    LazyLock::new(|| Semaphore::new(TMDB_MAX_CONCURRENCY));
+static TMDB_NEXT_SLOT: LazyLock<Mutex<Instant>> = LazyLock::new(|| Mutex::new(Instant::now()));
+
+/// 按固定间隔发放请求时隙，使整体速率不超过上限。
+async fn wait_for_tmdb_slot() {
+    let wait_until = {
+        let mut next = TMDB_NEXT_SLOT.lock().await;
+        let now = Instant::now();
+        let slot = (*next).max(now);
+        *next = slot + TMDB_MIN_INTERVAL;
+        slot
+    };
+    tokio::time::sleep_until(wait_until).await;
+}
+
+fn retry_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
+    retry_after
+        .unwrap_or_else(|| Duration::from_millis(500 * 2u64.pow(attempt)))
+        .min(Duration::from_secs(10))
+}
 
 #[derive(Clone)]
 pub struct TmdbClient {
@@ -159,6 +192,61 @@ impl TmdbClient {
         Ok(map_search_results(raw, &kind))
     }
 
+    /// 按年份限定搜索单一类型（tv / movie），用于把豆瓣条目对应到 TMDB。
+    pub async fn search_typed(
+        &self,
+        query: &str,
+        media_type: &TmdbMediaType,
+        year: Option<u32>,
+    ) -> Result<Vec<TmdbMedia>, TmdbError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let kind = media_type.as_str();
+        let year_key = match media_type {
+            TmdbMediaType::Tv => "first_air_date_year",
+            TmdbMediaType::Movie => "primary_release_year",
+        };
+        let year = year.map(|year| year.to_string());
+        let request = self.client.get(format!("{TMDB_API_BASE}/search/{kind}"));
+        let mut request = self.authorize(request).query(&[
+            ("query", query),
+            ("language", self.language.as_str()),
+            ("include_adult", "false"),
+        ]);
+        if let Some(year) = &year {
+            request = request.query(&[(year_key, year.as_str())]);
+        }
+        let raw: RawSearchResponse = self.send_json(request).await?;
+        Ok(map_search_results(raw, kind))
+    }
+
+    /// 通过 IMDb 编号精确查找 TMDB 条目。
+    pub async fn find_by_imdb(
+        &self,
+        imdb_id: &str,
+        media_type: &TmdbMediaType,
+    ) -> Result<Option<TmdbMedia>, TmdbError> {
+        let imdb_id = imdb_id.trim();
+        if !imdb_id.starts_with("tt") || !imdb_id[2..].bytes().all(|byte| byte.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let request = self.client.get(format!("{TMDB_API_BASE}/find/{imdb_id}"));
+        let request = self.authorize(request).query(&[
+            ("external_source", "imdb_id"),
+            ("language", self.language.as_str()),
+        ]);
+        let raw: RawFindResponse = self.send_json(request).await?;
+        let results = match media_type {
+            TmdbMediaType::Tv => raw.tv_results,
+            TmdbMediaType::Movie => raw.movie_results,
+        };
+        Ok(map_search_results(RawSearchResponse { results }, media_type.as_str())
+            .into_iter()
+            .next())
+    }
+
     pub async fn details(
         &self,
         tmdb_id: i64,
@@ -193,27 +281,74 @@ impl TmdbClient {
         }
     }
 
+    /// 经全局队列发送请求；网络错误、429 和 5xx 会按退避重试。
     async fn send_json<T: serde::de::DeserializeOwned>(
         &self,
         request: RequestBuilder,
     ) -> Result<T, TmdbError> {
-        let response = request
-            .send()
-            .await
-            .map_err(|error| TmdbError::Transport(error.without_url()))?;
+        let mut attempt = 0;
+        loop {
+            let current = request
+                .try_clone()
+                .expect("TMDB requests have no streaming body");
+            let (result, retry_after) = {
+                let _permit = TMDB_CONCURRENCY
+                    .acquire()
+                    .await
+                    .expect("TMDB semaphore is never closed");
+                wait_for_tmdb_slot().await;
+                Self::send_once(current).await
+            };
+            attempt += 1;
+            match result {
+                Err(error) if attempt < TMDB_MAX_ATTEMPTS && is_retryable(&error) => {
+                    let delay = retry_delay(attempt - 1, retry_after);
+                    tracing::debug!(%error, attempt, delay_ms = delay.as_millis() as u64, "retrying TMDB request");
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+                Ok(body) => {
+                    return serde_json::from_str(&body)
+                        .map_err(|error| TmdbError::Parse(error.to_string()));
+                }
+            }
+        }
+    }
+
+    async fn send_once(request: RequestBuilder) -> (Result<String, TmdbError>, Option<Duration>) {
+        let response = match request.timeout(Duration::from_secs(20)).send().await {
+            Ok(response) => response,
+            Err(error) => return (Err(TmdbError::Transport(error.without_url())), None),
+        };
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| TmdbError::Transport(error.without_url()))?;
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs);
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(error) => return (Err(TmdbError::Transport(error.without_url())), None),
+        };
         if !status.is_success() {
             let message = serde_json::from_str::<RawError>(&body)
                 .ok()
                 .and_then(|error| error.status_message)
                 .unwrap_or_else(|| sanitize_error_body(&body));
-            return Err(TmdbError::Http { status, message });
+            return (Err(TmdbError::Http { status, message }), retry_after);
         }
-        serde_json::from_str(&body).map_err(|error| TmdbError::Parse(error.to_string()))
+        (Ok(body), None)
+    }
+}
+
+fn is_retryable(error: &TmdbError) -> bool {
+    match error {
+        TmdbError::Transport(_) => true,
+        TmdbError::Http { status, .. } => {
+            *status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+        }
+        _ => false,
     }
 }
 
@@ -226,6 +361,14 @@ struct RawError {
 struct RawSearchResponse {
     #[serde(default)]
     results: Vec<RawMedia>,
+}
+
+#[derive(Deserialize)]
+struct RawFindResponse {
+    #[serde(default)]
+    movie_results: Vec<RawMedia>,
+    #[serde(default)]
+    tv_results: Vec<RawMedia>,
 }
 
 #[derive(Deserialize)]

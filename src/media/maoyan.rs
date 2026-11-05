@@ -8,19 +8,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::{FixedOffset, Utc};
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::tmdb::{TmdbMedia, TmdbMediaType};
+use super::douban::{DoubanClient, DoubanSubject};
+use super::tmdb::{TmdbClient, TmdbMedia, TmdbMediaType};
 
 const MAOYAN_BASE: &str = "https://piaofang.maoyan.com";
 const HEAT_PAGE: &str = "https://piaofang.maoyan.com/dashboard/web-heat";
 /// 后台刷新周期：猫眼热度约每小时更新。
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
-/// TMDB 搜索结果缓存时长，避免每轮刷新都重复匹配同名影视。
-const TMDB_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// 匹配结果缓存时长，避免每轮刷新都重复匹配同名影视。
+const MATCH_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const MAOYAN_MAX_LIMIT: usize = 30;
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
 
@@ -145,6 +145,8 @@ pub struct MaoyanRankItem {
     pub platform: Option<String>,
     /// 票房或热度的展示文本，例如 "6.71亿" / "热度 8523.6"
     pub metric: Option<String>,
+    #[serde(default)]
+    pub douban: Option<DoubanSubject>,
     pub tmdb: Option<TmdbMedia>,
 }
 
@@ -192,7 +194,8 @@ pub struct MaoyanStore {
     errors: Mutex<HashMap<ChartKey, String>>,
     refreshing: AtomicBool,
     last_attempt: Mutex<Option<Instant>>,
-    tmdb_cache: Mutex<HashMap<(String, &'static str), (Instant, Vec<TmdbMedia>)>>,
+    match_cache: Mutex<HashMap<(String, &'static str), (Instant, MediaMatch)>>,
+    posters: Mutex<std::collections::VecDeque<(String, String)>>,
 }
 
 /// 刷新标志的 RAII 守卫：刷新任务结束（包括被取消）时自动清除。
@@ -293,18 +296,51 @@ impl MaoyanStore {
         self.errors.lock().await.insert((chart, platform), error);
     }
 
-    pub async fn cached_tmdb(&self, query: &str, media_type: &TmdbMediaType) -> Option<Vec<TmdbMedia>> {
-        let cache = self.tmdb_cache.lock().await;
-        cache
-            .get(&(query.to_string(), media_type.as_str()))
-            .filter(|(stored, _)| stored.elapsed() < TMDB_CACHE_TTL)
-            .map(|(_, results)| results.clone())
+    /// 已保存快照中的匹配结果，按（片名, 类型）索引；只收录匹配到 TMDB 的条目。
+    pub async fn previous_matches(&self) -> HashMap<(String, &'static str), MediaMatch> {
+        let entries = self.entries.lock().await;
+        let mut matches = HashMap::new();
+        for entry in entries.values() {
+            for item in &entry.items {
+                if item.tmdb.is_some() {
+                    matches
+                        .entry((item.title.clone(), entry.chart.media_type().as_str()))
+                        .or_insert_with(|| MediaMatch {
+                            douban: item.douban.clone(),
+                            tmdb: item.tmdb.clone(),
+                        });
+                }
+            }
+        }
+        matches
     }
 
-    pub async fn store_tmdb(&self, query: String, media_type: &TmdbMediaType, results: Vec<TmdbMedia>) {
-        let mut cache = self.tmdb_cache.lock().await;
-        cache.retain(|_, (stored, _)| stored.elapsed() < TMDB_CACHE_TTL);
-        cache.insert((query, media_type.as_str()), (Instant::now(), results));
+    pub async fn cached_poster(&self, id: &str) -> Option<String> {
+        let posters = self.posters.lock().await;
+        posters.iter().find(|(key, _)| key == id).map(|(_, value)| value.clone())
+    }
+
+    pub async fn store_poster(&self, id: String, data_url: String) {
+        let mut posters = self.posters.lock().await;
+        posters.retain(|(key, _)| key != &id);
+        if posters.len() >= 300 {
+            posters.pop_front();
+        }
+        posters.push_back((id, data_url));
+    }
+
+    pub async fn cached_match(&self, title: &str, media_type: &TmdbMediaType) -> Option<MediaMatch> {
+        let cache = self.match_cache.lock().await;
+        cache
+            .get(&(title.to_string(), media_type.as_str()))
+            .filter(|(stored, _)| stored.elapsed() < MATCH_CACHE_TTL)
+            .map(|(_, found)| found.clone())
+    }
+
+    pub async fn store_match(&self, title: String, media_type: &TmdbMediaType, found: MediaMatch) {
+        let mut cache = self.match_cache.lock().await;
+        cache.retain(|_, (stored, _)| stored.elapsed() < MATCH_CACHE_TTL);
+        cache.insert((title, media_type.as_str()), (Instant::now(), found));
     }
 }
 
@@ -473,6 +509,7 @@ pub fn parse_chart(
             release_info: text(info.get("releaseInfo")),
             platform: text(info.get("platformDesc")),
             metric,
+            douban: None,
             tmdb: None,
         });
     }
@@ -501,41 +538,180 @@ pub fn tmdb_query_title(title: &str) -> String {
 
 pub fn pick_tmdb_match(title: &str, results: Vec<TmdbMedia>) -> Option<TmdbMedia> {
     let wanted = normalize(&tmdb_query_title(title));
-    let exact = results.iter().position(|media| {
-        normalize(&media.title) == wanted
-            || media
-                .original_title
-                .as_deref()
-                .is_some_and(|original| normalize(original) == wanted)
-    });
+    let exact = results.iter().position(|media| title_matches(media, &wanted));
     let index = exact.unwrap_or(0);
     results.into_iter().nth(index)
 }
 
-/// 为榜单条目并发匹配 TMDB 条目；匹配失败只留空，不影响榜单展示。
-pub async fn attach_tmdb<F, Fut>(items: &mut [MaoyanRankItem], media_type: TmdbMediaType, search: F)
-where
-    F: Fn(String, TmdbMediaType) -> Fut,
-    Fut: std::future::Future<Output = Option<Vec<TmdbMedia>>>,
-{
-    let queries: Vec<_> = items
-        .iter()
-        .map(|item| (item.rank, tmdb_query_title(&item.title)))
-        .collect();
-    let mut matches: HashMap<usize, Vec<TmdbMedia>> = futures::stream::iter(queries)
-        .map(|(rank, query)| {
-            let future = search(query, media_type.clone());
-            async move { (rank, future.await) }
+fn title_matches(media: &TmdbMedia, wanted: &str) -> bool {
+    normalize(&media.title) == wanted
+        || media
+            .original_title
+            .as_deref()
+            .is_some_and(|original| normalize(original) == wanted)
+}
+
+fn year_close(media: &TmdbMedia, year: Option<u32>) -> bool {
+    match (media.year, year) {
+        (Some(found), Some(wanted)) => found.abs_diff(wanted) <= 1,
+        _ => false,
+    }
+}
+
+/// 在豆瓣结果中找与榜单片名完全一致的条目（忽略标点空格），同名时取最新的。
+pub fn pick_douban(
+    title: &str,
+    media_type: &TmdbMediaType,
+    subjects: Vec<DoubanSubject>,
+) -> Option<DoubanSubject> {
+    let full = normalize(title);
+    let base = normalize(&tmdb_query_title(title));
+    // 完全同名优先；其次是同一部剧的某一季（榜单常不写季号），取最新一季。
+    subjects
+        .into_iter()
+        .filter(|subject| &subject.media_type == media_type)
+        .filter_map(|subject| {
+            let name = normalize(&subject.title);
+            let priority = if name == full {
+                2
+            } else if name == base || normalize(&tmdb_query_title(&subject.title)) == base {
+                1
+            } else {
+                return None;
+            };
+            Some(((priority, subject.year.unwrap_or(0)), subject))
         })
-        .buffer_unordered(4)
-        .filter_map(|(rank, results)| async move { results.map(|results| (rank, results)) })
-        .collect()
-        .await;
-    for item in items.iter_mut() {
-        if let Some(results) = matches.remove(&item.rank) {
-            item.tmdb = pick_tmdb_match(&item.title, results);
+        .max_by_key(|(key, _)| *key)
+        .map(|(_, subject)| subject)
+}
+
+/// 用豆瓣给出的名称和年份在 TMDB 结果中挑选：片名一致优先，其次年份相符。
+pub fn pick_tmdb_for(
+    names: &[String],
+    year: Option<u32>,
+    results: Vec<TmdbMedia>,
+) -> Option<TmdbMedia> {
+    let wanted: Vec<String> = names.iter().map(|name| normalize(&tmdb_query_title(name))).collect();
+    let exact_with_year = results.iter().position(|media| {
+        wanted.iter().any(|name| title_matches(media, name)) && (year.is_none() || year_close(media, year))
+    });
+    let exact = || results.iter().position(|media| wanted.iter().any(|name| title_matches(media, name)));
+    let by_year = || results.iter().position(|media| year_close(media, year));
+    let index = exact_with_year.or_else(exact).or_else(by_year)?;
+    results.into_iter().nth(index)
+}
+
+/// 榜单条目的匹配结果。
+#[derive(Debug, Clone, Default)]
+pub struct MediaMatch {
+    pub douban: Option<DoubanSubject>,
+    pub tmdb: Option<TmdbMedia>,
+}
+
+/// 匹配一个榜单片名：先查豆瓣，再按豆瓣信息（年份、IMDb、原名、又名）定位 TMDB；
+/// 豆瓣找不到时直接搜索 TMDB。返回值第二项表示结果是否可靠（期间没有请求失败），
+/// 只有可靠的结果才应缓存，失败的下次刷新会重试。
+pub async fn resolve_media(
+    title: &str,
+    media_type: &TmdbMediaType,
+    douban: &DoubanClient,
+    tmdb: Option<&TmdbClient>,
+) -> (MediaMatch, bool) {
+    let mut reliable = true;
+    let subject = match douban.search(title).await {
+        Ok(subjects) => pick_douban(title, media_type, subjects),
+        Err(error) => {
+            tracing::debug!(%error, title, "douban search failed");
+            reliable = false;
+            None
+        }
+    };
+    let Some(tmdb) = tmdb else {
+        return (MediaMatch { douban: subject, tmdb: None }, false);
+    };
+    fn note(
+        result: Result<Option<TmdbMedia>, super::tmdb::TmdbError>,
+        reliable: &mut bool,
+        title: &str,
+    ) -> Option<TmdbMedia> {
+        match result {
+            Ok(found) => found,
+            Err(error) => {
+                tracing::debug!(%error, title, "tmdb lookup failed");
+                *reliable = false;
+                None
+            }
         }
     }
+
+    let mut found = None;
+    if let Some(subject) = &subject {
+        let base = tmdb_query_title(&subject.title);
+        // 带季号的剧集在 TMDB 以首季年份收录，不能按本季年份过滤。
+        let year = if base == subject.title.trim() { subject.year } else { None };
+        let names = vec![subject.title.clone()];
+        found = note(
+            tmdb.search_typed(&base, media_type, year)
+                .await
+                .map(|results| pick_tmdb_for(&names, year, results)),
+            &mut reliable,
+            title,
+        );
+        if found.is_none() {
+            match douban.detail(subject).await {
+                Ok(detail) => {
+                    if let Some(imdb) = detail.imdb.as_deref() {
+                        found = note(tmdb.find_by_imdb(imdb, media_type).await, &mut reliable, title);
+                    }
+                    let aliases: Vec<String> = detail
+                        .original_title
+                        .into_iter()
+                        .chain(detail.aka)
+                        .filter(|name| name.trim() != subject.title.trim())
+                        .take(3)
+                        .collect();
+                    for alias in aliases {
+                        if found.is_some() {
+                            break;
+                        }
+                        let names = vec![alias.clone(), subject.title.clone()];
+                        found = note(
+                            tmdb.search_typed(&tmdb_query_title(&alias), media_type, year)
+                                .await
+                                .map(|results| pick_tmdb_for(&names, year, results)),
+                            &mut reliable,
+                            title,
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(%error, title, "douban detail failed");
+                    reliable = false;
+                }
+            }
+        }
+    }
+    if found.is_none() {
+        // 豆瓣没有收录时沿用宽松匹配；豆瓣有条目时仍要求片名或年份相符，避免张冠李戴。
+        let names = vec![title.to_string()];
+        let year = subject.as_ref().and_then(|subject| subject.year);
+        let lenient = subject.is_none();
+        found = note(
+            tmdb.search_typed(&tmdb_query_title(title), media_type, None)
+                .await
+                .map(|results| {
+                    if lenient {
+                        pick_tmdb_match(title, results)
+                    } else {
+                        pick_tmdb_for(&names, year, results)
+                    }
+                }),
+            &mut reliable,
+            title,
+        );
+    }
+    let reliable = reliable || found.is_some();
+    (MediaMatch { douban: subject, tmdb: found }, reliable)
 }
 
 #[cfg(test)]
@@ -585,6 +761,55 @@ mod tests {
             chart_url(MaoyanChart::Variety, MaoyanPlatform::All, "20261105"),
             "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=2&showDate=20261105"
         );
+    }
+
+    fn tmdb(id: i64, title: &str, year: Option<u32>) -> TmdbMedia {
+        TmdbMedia {
+            tmdb_id: id,
+            media_type: TmdbMediaType::Tv,
+            title: title.to_string(),
+            original_title: None,
+            year,
+            overview: String::new(),
+            poster_path: None,
+            is_animation: false,
+            genres: Vec::new(),
+        }
+    }
+
+    fn douban(id: &str, title: &str, year: Option<u32>, media_type: TmdbMediaType) -> DoubanSubject {
+        DoubanSubject {
+            id: id.to_string(),
+            title: title.to_string(),
+            year,
+            rating: None,
+            poster_id: None,
+            url: String::new(),
+            media_type,
+        }
+    }
+
+    #[test]
+    fn douban_and_tmdb_candidates_are_matched_by_title_and_year() {
+        let subjects = vec![
+            douban("1", "庆余年 第一季", Some(2019), TmdbMediaType::Tv),
+            douban("2", "庆余年 第二季", Some(2024), TmdbMediaType::Tv),
+            douban("3", "庆余年第二季", Some(2024), TmdbMediaType::Movie),
+        ];
+        assert_eq!(pick_douban("庆余年 第二季", &TmdbMediaType::Tv, subjects.clone()).unwrap().id, "2");
+        assert!(pick_douban("庆余年之外", &TmdbMediaType::Tv, subjects).is_none());
+        let seasons = vec![
+            douban("7", "向往的生活 第一季", Some(2017), TmdbMediaType::Tv),
+            douban("8", "向往的生活 第八季", Some(2024), TmdbMediaType::Tv),
+        ];
+        assert_eq!(pick_douban("向往的生活", &TmdbMediaType::Tv, seasons).unwrap().id, "8");
+
+        let names = vec!["小城良方".to_string()];
+        let results = vec![tmdb(1, "小城", Some(2026)), tmdb(2, "小城良方", Some(2020)), tmdb(3, "小城良方", Some(2026))];
+        assert_eq!(pick_tmdb_for(&names, Some(2026), results).unwrap().tmdb_id, 3);
+        // 没有同名条目时接受年份相符的结果（TMDB 已按年份过滤）；都不符合则不匹配。
+        assert_eq!(pick_tmdb_for(&names, Some(2026), vec![tmdb(9, "Remedy", Some(2026))]).unwrap().tmdb_id, 9);
+        assert!(pick_tmdb_for(&names, Some(2026), vec![tmdb(9, "Remedy", Some(2010))]).is_none());
     }
 
     #[test]
