@@ -1,3 +1,4 @@
+# 搜索编码器与站点向量资产校验；手动发布前由 release.yml 复用同样的检查。
 name: Search checks
 
 on:
