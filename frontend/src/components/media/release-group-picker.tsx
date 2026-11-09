@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -192,8 +192,6 @@ type PickerProps = {
   siteIds: number[];
   policy: GroupPolicy;
   onChange: (policy: GroupPolicy) => void;
-  /** 打开时自动探测一次（创建订阅时使用）。 */
-  autoProbe?: boolean;
   qualityProfileName?: string;
 };
 
@@ -205,7 +203,6 @@ export function ReleaseGroupPicker({
   siteIds,
   policy,
   onChange,
-  autoProbe = false,
   qualityProfileName,
 }: PickerProps) {
   const idPrefix = useId();
@@ -222,7 +219,7 @@ export function ReleaseGroupPicker({
 
   const runProbe = useCallback(async () => {
     if (siteIds.length === 0) {
-      setProbeError("请先在下方选择站点。");
+      setProbeError("请先在上方选择站点。");
       return;
     }
     const request = ++requestRef.current;
@@ -253,18 +250,11 @@ export function ReleaseGroupPicker({
 
   const probeKey = `${tmdbId}|${mediaType}|${season}|${absoluteNumbering}|${siteKey}`;
   const [probedKey, setProbedKey] = useState("");
-  const autoProbed = useRef(false);
+  // 只在用户点击时探测：站点多时一次探测要逐站搜索，不能随打开弹窗或勾选站点自动触发。
   const probeNow = useCallback(() => {
     setProbedKey(probeKey);
     void runProbe();
   }, [probeKey, runProbe]);
-  // 只在打开时自动探测一次；之后条件变化由用户决定是否重新探测，避免反复搜索站点。
-  useEffect(() => {
-    if (autoProbe && !autoProbed.current && siteIds.length > 0) {
-      autoProbed.current = true;
-      probeNow();
-    }
-  }, [autoProbe, probeNow, siteIds.length]);
   const stale = probe !== null && probedKey !== probeKey;
 
   const named = useMemo(() => (probe?.groups ?? []).filter((group) => group.name), [probe]);
@@ -321,7 +311,9 @@ export function ReleaseGroupPicker({
                 ? "正在各站点搜索并按制作组归类…"
                 : probe
                   ? `在 ${probe.successful_sites}/${probe.total_sites} 个站点找到 ${probe.matched} 条资源，归为 ${named.length} 个制作组 · ${formatRelative(probe.probed_at)}`
-                  : "按所选站点搜索这部剧，按制作组归类后挑选首选和备选。"}
+                  : siteIds.length === 0
+                    ? "先在上方选择站点，再点击「探测制作组」。"
+                    : `选好站点后点击「探测制作组」，将在已选的 ${siteIds.length} 个站点搜索并按制作组归类。`}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -343,7 +335,15 @@ export function ReleaseGroupPicker({
                 ))}
               </div>
             ) : null}
-            <Button type="button" variant={stale ? "default" : "outline"} size="sm" loading={probing} onClick={probeNow}>
+            <Button
+              type="button"
+              variant={stale || !probe ? "default" : "outline"}
+              size="sm"
+              loading={probing}
+              disabled={siteIds.length === 0}
+              title={siteIds.length === 0 ? "请先选择站点" : undefined}
+              onClick={probeNow}
+            >
               {probing ? null : <RefreshCw aria-hidden="true" />}
               {stale ? "条件已变，重新探测" : probe ? "重新探测" : "探测制作组"}
             </Button>
@@ -358,6 +358,11 @@ export function ReleaseGroupPicker({
         {probing && !probe ? (
           <div className="flex items-center gap-2 rounded-xl border border-dashed border-border p-6 text-sm text-muted">
             <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />正在探测，站点较多时需要十几秒。
+          </div>
+        ) : null}
+        {!probe && !probing ? (
+          <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted">
+            尚未探测。探测会在每个已选站点各搜索一次{siteIds.length > 10 ? `，当前已选 ${siteIds.length} 个站点，可先缩小到常用站点再探测` : ""}；也可以跳过探测，在右侧手动填写制作组，或不选制作组、按质量配置追更。
           </div>
         ) : null}
         {probe && named.length === 0 && !probing ? (

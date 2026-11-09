@@ -34,6 +34,46 @@ impl Database {
         .map_err(join_error)?
     }
 
+    /// 全球榜单（Netflix / 红果短剧 / 音乐）快照：每个数据源一行，payload 为该源全部榜单。
+    pub async fn list_global_rank_snapshots(&self) -> Result<Vec<(String, String)>, AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            let mut statement = conn
+                .prepare("SELECT source, payload FROM global_rank_snapshots")
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(sql_error)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(sql_error)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    pub async fn save_global_rank_snapshot(
+        &self,
+        source: String,
+        payload: String,
+        fetched_at: String,
+    ) -> Result<(), AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            conn.execute(
+                "INSERT INTO global_rank_snapshots (source, payload, fetched_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(source) DO UPDATE SET
+                    payload = excluded.payload, fetched_at = excluded.fetched_at",
+                params![source, payload, fetched_at],
+            )
+            .map_err(sql_error)?;
+            Ok(())
+        })
+        .await
+        .map_err(join_error)?
+    }
+
     pub async fn save_maoyan_chart(
         &self,
         chart: String,

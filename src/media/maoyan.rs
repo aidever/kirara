@@ -1,6 +1,8 @@
-//! 猫眼榜单：电影实时票房、网络电影、电视剧/网剧/综艺热度（与 MoviePilot「猫眼榜单订阅」同源）。
+//! 猫眼榜单：电影实时票房、影史/年度票房、全球年度票房、网络电影、电视剧/网剧/综艺热度
+//! （与 MoviePilot 插件 GlobalRankPro 的猫眼数据源同源）。
 //!
-//! 票房接口可直接请求；热度接口需要页面会话签名，因此在已配置的远程浏览器
+//! 实时票房接口与影史/年度票房页面（服务端直出 HTML）可直接请求；全球年度票房来自
+//! Box Office Mojo；热度接口需要页面会话签名，因此在已配置的远程浏览器
 //! （Browserless 优先，其次 Lightpanda）中打开猫眼专业版页面后，由页面内 fetch 获取。
 
 use std::collections::HashMap;
@@ -37,10 +39,25 @@ pub enum MaoyanChart {
     WebSeries,
     /// 综艺热度
     Variety,
+    /// 影史总票房（猫眼 rankings/year，不带年份）
+    Total,
+    /// 国内年度票房（猫眼 rankings/year?year=YYYY）
+    Year,
+    /// 全球年度票房（Box Office Mojo）
+    Global,
 }
 
 impl MaoyanChart {
-    pub const ALL: [Self; 5] = [Self::Movie, Self::Tv, Self::WebSeries, Self::Variety, Self::WebMovie];
+    pub const ALL: [Self; 8] = [
+        Self::Movie,
+        Self::Tv,
+        Self::WebSeries,
+        Self::Variety,
+        Self::WebMovie,
+        Self::Total,
+        Self::Year,
+        Self::Global,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -49,6 +66,9 @@ impl MaoyanChart {
             Self::Tv => "tv",
             Self::WebSeries => "web_series",
             Self::Variety => "variety",
+            Self::Total => "total",
+            Self::Year => "year",
+            Self::Global => "global",
         }
     }
 
@@ -56,7 +76,7 @@ impl MaoyanChart {
     /// 网络电影分账榜猫眼只持续更新腾讯视频（全网、芒果无效，爱奇艺、优酷已停更）。
     pub fn platforms(self) -> &'static [MaoyanPlatform] {
         match self {
-            Self::Movie => &[MaoyanPlatform::All],
+            Self::Movie | Self::Total | Self::Year | Self::Global => &[MaoyanPlatform::All],
             Self::WebMovie => &[MaoyanPlatform::Tencent],
             _ => &MaoyanPlatform::ALL,
         }
@@ -69,13 +89,16 @@ impl MaoyanChart {
             "tv" => Some(Self::Tv),
             "web_series" => Some(Self::WebSeries),
             "variety" => Some(Self::Variety),
+            "total" => Some(Self::Total),
+            "year" => Some(Self::Year),
+            "global" => Some(Self::Global),
             _ => None,
         }
     }
 
     pub fn media_type(self) -> TmdbMediaType {
         match self {
-            Self::Movie | Self::WebMovie => TmdbMediaType::Movie,
+            Self::Movie | Self::WebMovie | Self::Total | Self::Year | Self::Global => TmdbMediaType::Movie,
             Self::Tv | Self::WebSeries | Self::Variety => TmdbMediaType::Tv,
         }
     }
@@ -85,12 +108,17 @@ impl MaoyanChart {
             Self::Tv => Some(0),
             Self::WebSeries => Some(1),
             Self::Variety => Some(2),
-            Self::Movie | Self::WebMovie => None,
+            Self::Movie | Self::WebMovie | Self::Total | Self::Year | Self::Global => None,
         }
     }
 
     pub fn needs_browser(self) -> bool {
-        !matches!(self, Self::Movie)
+        matches!(self, Self::WebMovie | Self::Tv | Self::WebSeries | Self::Variety)
+    }
+
+    /// 服务端直出 HTML 的票房榜（影史 / 年度 / 全球），直接请求页面解析。
+    pub fn is_html(self) -> bool {
+        matches!(self, Self::Total | Self::Year | Self::Global)
     }
 }
 
@@ -372,8 +400,12 @@ pub fn show_date() -> String {
 }
 
 pub fn chart_url(chart: MaoyanChart, platform: MaoyanPlatform, show_date: &str) -> String {
+    let year = show_date.get(..4).unwrap_or(show_date);
     match chart {
         MaoyanChart::Movie => format!("{MAOYAN_BASE}/dashboard-ajax/movie"),
+        MaoyanChart::Total => format!("{MAOYAN_BASE}/rankings/year"),
+        MaoyanChart::Year => format!("{MAOYAN_BASE}/rankings/year?year={year}"),
+        MaoyanChart::Global => format!("https://www.boxofficemojo.com/year/world/{year}/"),
         // 网络电影只有分账榜：按月统计（dateType=2，日期取当月 1 日），日榜通常只有一两部。
         MaoyanChart::WebMovie => format!(
             "{MAOYAN_BASE}/i/api/encrypt/dashboard/webHeatNetData?showDate={}01&platformType={}&dateType=2&rankType=0",
@@ -423,6 +455,137 @@ pub async fn fetch_chart_payload(
         .pop()
         .unwrap_or_else(|| Err("浏览器没有返回数据".to_string()))
         .map_err(MaoyanError::Request)
+}
+
+/// 获取并解析影史 / 年度 / 全球票房榜（服务端直出 HTML，无需签名）。
+pub async fn fetch_html_chart(
+    http: &reqwest::Client,
+    chart: MaoyanChart,
+    url: &str,
+    limit: usize,
+) -> Result<Vec<MaoyanRankItem>, MaoyanError> {
+    let response = http
+        .get(url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
+        .header(reqwest::header::ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|error| MaoyanError::Request(error.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(MaoyanError::Request(format!("HTTP {}", status.as_u16())));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| MaoyanError::Request(error.to_string()))?;
+    let html = String::from_utf8_lossy(&bytes);
+    let items = match chart {
+        MaoyanChart::Global => parse_box_office_mojo(&html, limit),
+        _ => parse_maoyan_rankings(&html, limit),
+    };
+    if items.is_empty() {
+        return Err(MaoyanError::Parse("页面中没有找到榜单条目".to_string()));
+    }
+    Ok(items)
+}
+
+fn element_text(element: scraper::ElementRef<'_>) -> String {
+    element
+        .text()
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 猫眼影史 / 年度票房页：`ul.row` 每行 col0 名次、col1 片名+上映日期、col2 票房（万元）。
+pub fn parse_maoyan_rankings(html: &str, limit: usize) -> Vec<MaoyanRankItem> {
+    let document = scraper::Html::parse_document(html);
+    let row = scraper::Selector::parse("ul.row").expect("valid selector");
+    let first = scraper::Selector::parse(".first-line").expect("valid selector");
+    let second = scraper::Selector::parse(".second-line").expect("valid selector");
+    let rank = scraper::Selector::parse("li.col0").expect("valid selector");
+    let box_office = scraper::Selector::parse("li.col2").expect("valid selector");
+    let mut items = Vec::new();
+    for element in document.select(&row) {
+        if items.len() >= limit {
+            break;
+        }
+        let Some(title) = element.select(&first).next().map(element_text).filter(|text| !text.is_empty()) else {
+            continue;
+        };
+        let position = element
+            .select(&rank)
+            .next()
+            .and_then(|cell| element_text(cell).parse::<usize>().ok())
+            .unwrap_or(items.len() + 1);
+        let metric = element
+            .select(&box_office)
+            .next()
+            .and_then(|cell| element_text(cell).replace(',', "").parse::<f64>().ok())
+            .filter(|value| *value > 0.0)
+            .map(|wan| format!("票房 {}", format_yuan(wan * 10_000.0)));
+        items.push(MaoyanRankItem {
+            rank: position,
+            title,
+            release_info: element.select(&second).next().map(element_text).filter(|text| !text.is_empty()),
+            platform: None,
+            metric,
+            douban: None,
+            tmdb: None,
+        });
+    }
+    items
+}
+
+fn format_usd(value: f64) -> String {
+    if value >= 100_000_000.0 {
+        format!("{:.2}亿美元", value / 100_000_000.0)
+    } else if value >= 10_000.0 {
+        format!("{:.0}万美元", value / 10_000.0)
+    } else {
+        format!("{value:.0}美元")
+    }
+}
+
+/// Box Office Mojo 全球年度榜：每行名次、片名、全球票房、北美票房、北美占比、海外票房、海外占比。
+pub fn parse_box_office_mojo(html: &str, limit: usize) -> Vec<MaoyanRankItem> {
+    let document = scraper::Html::parse_document(html);
+    let row = scraper::Selector::parse("tr").expect("valid selector");
+    let cell = scraper::Selector::parse("td").expect("valid selector");
+    let money = |text: &str| text.replace(['$', ','], "").trim().parse::<f64>().ok().filter(|value| *value > 0.0);
+    let mut items = Vec::new();
+    for element in document.select(&row) {
+        if items.len() >= limit {
+            break;
+        }
+        let cells: Vec<String> = element.select(&cell).map(element_text).collect();
+        if cells.len() < 3 || cells[1].is_empty() {
+            continue;
+        }
+        let worldwide = money(&cells[2]);
+        let domestic = cells.get(3).and_then(|value| money(value));
+        let metric = worldwide.map(|value| {
+            let mut text = format!("全球 {}", format_usd(value));
+            if let Some(domestic) = domestic {
+                text.push_str(&format!(" · 北美 {}", format_usd(domestic)));
+            }
+            text
+        });
+        items.push(MaoyanRankItem {
+            rank: cells[0].parse().unwrap_or(items.len() + 1),
+            title: cells[1].clone(),
+            release_info: None,
+            platform: None,
+            metric,
+            douban: None,
+            tmdb: None,
+        });
+    }
+    items
 }
 
 /// 在同一个猫眼专业版页面里批量获取多个热度榜，结果与 `urls` 一一对应。
@@ -829,6 +992,32 @@ mod tests {
         assert_eq!(
             chart_url(MaoyanChart::Variety, MaoyanPlatform::All, "20261105"),
             "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=2&showDate=20261105"
+        );
+    }
+
+    #[test]
+    fn parses_box_office_pages() {
+        let maoyan = r#"<div><ul class="row"><li class="col0">排名</li><li class="col1">片名</li></ul>
+            <ul class="row" data-com="hrefTo,href:'/movie/1294273'">
+              <li class="col0">1</li>
+              <li class="col1"><p class="first-line">哪吒之魔童闹海</p><p class="second-line">2025-01-29 上映</p></li>
+              <li class="col2 tr">1544614</li><li class="col3 tr">47.6</li><li class="col4 tr">24</li>
+            </ul></div>"#;
+        let items = parse_maoyan_rankings(maoyan, 10);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "哪吒之魔童闹海");
+        assert_eq!(items[0].release_info.as_deref(), Some("2025-01-29 上映"));
+        assert_eq!(items[0].metric.as_deref(), Some("票房 154.46亿"));
+
+        let mojo = r#"<table><tr><th>Rank</th><th>Release Group</th></tr>
+            <tr><td>1</td><td><a href="/releasegroup/x">Spider-Man: Brand New Day</a></td><td>$2,521,214,671</td><td>$958,944,095</td><td>38.0%</td></tr></table>"#;
+        let items = parse_box_office_mojo(mojo, 10);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Spider-Man: Brand New Day");
+        assert_eq!(items[0].metric.as_deref(), Some("全球 25.21亿美元 · 北美 9.59亿美元"));
+        assert_eq!(
+            chart_url(MaoyanChart::Year, MaoyanPlatform::All, "20261105"),
+            "https://piaofang.maoyan.com/rankings/year?year=2026"
         );
     }
 

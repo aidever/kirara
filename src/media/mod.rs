@@ -1,6 +1,7 @@
 pub mod domain;
 mod lease;
 pub mod douban;
+pub mod global_rank;
 pub mod maoyan;
 pub mod models;
 pub mod progression;

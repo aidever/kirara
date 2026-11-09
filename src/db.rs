@@ -2825,6 +2825,12 @@ impl Database {
                     PRIMARY KEY (chart, platform)
                 );
 
+                CREATE TABLE IF NOT EXISTS global_rank_snapshots (
+                    source TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS media_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     tmdb_token TEXT,

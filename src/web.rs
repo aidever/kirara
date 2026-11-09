@@ -433,6 +433,8 @@ fn media_router(
         .route("/tmdb/search", get(search_tmdb_media))
         .route("/maoyan", get(get_maoyan_rank))
         .route("/maoyan/refresh", post(refresh_maoyan_rank))
+        .route("/global-rank", get(get_global_rank))
+        .route("/global-rank/refresh", post(refresh_global_rank))
         .route("/douban/poster", get(get_douban_poster))
         .route("/douban/subject", get(get_douban_subject))
         .route("/tmdb/details", get(get_tmdb_details_query))
@@ -1499,7 +1501,7 @@ async fn get_maoyan_rank(
 ) -> Result<Json<crate::media::maoyan::MaoyanRankView>, ApiError> {
     use crate::media::maoyan::{MaoyanChart, MaoyanPlatform};
     let chart = MaoyanChart::parse(&query.chart).ok_or_else(|| {
-        ApiError::bad_request("chart must be movie, web_movie, tv, web_series, or variety")
+        ApiError::bad_request("chart must be movie, web_movie, tv, web_series, variety, total, year, or global")
     })?;
     let platform = MaoyanPlatform::parse(query.platform.as_deref().unwrap_or("all"))
         .ok_or_else(|| ApiError::bad_request("platform must be all, tencent, iqiyi, youku, or mango"))?;
@@ -1553,6 +1555,34 @@ async fn get_douban_subject(
             .await
             .map_err(ApiError::from)?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct GlobalRankQuery {
+    source: String,
+}
+
+fn parse_rank_source(value: &str) -> Result<crate::media::global_rank::RankSource, ApiError> {
+    crate::media::global_rank::RankSource::parse(value)
+        .ok_or_else(|| ApiError::bad_request("source must be netflix, hongguo, or music"))
+}
+
+/// 全球榜单（Netflix / 红果短剧 / 音乐）：返回后台快照，不在请求内抓取。
+async fn get_global_rank(
+    State(state): State<MediaApiState>,
+    Query(query): Query<GlobalRankQuery>,
+) -> Result<Json<crate::media::global_rank::RankSourceView>, ApiError> {
+    let source = parse_rank_source(&query.source)?;
+    Ok(Json(state.service.global_rank(source).await))
+}
+
+async fn refresh_global_rank(
+    State(state): State<MediaApiState>,
+    Query(query): Query<GlobalRankQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let source = parse_rank_source(&query.source)?;
+    let refreshing = state.service.spawn_global_rank_refresh(source);
+    Ok(Json(serde_json::json!({ "refreshing": refreshing })))
 }
 
 /// 在后台刷新全部猫眼榜单，立即返回；刷新期间读取接口仍返回旧数据。

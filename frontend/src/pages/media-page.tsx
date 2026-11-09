@@ -72,6 +72,7 @@ import {
   type LocalReleaseScopeKind,
 } from "@/lib/media-release-scope";
 import { cn } from "@/lib/utils";
+import { GlobalRankSource } from "@/components/media/global-rank";
 import { FilterChips, FilterSummary, Highlight, SearchBox, SortableHead } from "@/components/list-controls";
 import { compareValues, matchesQuery, oneOf, usePageState, useSortState } from "@/lib/page-state";
 
@@ -562,7 +563,7 @@ const QUALITY_PRESETS: Array<{
 const MODES: Array<{ value: MediaMode; label: string; icon: typeof Tv }> = [
   { value: "subscriptions", label: "订阅", icon: Tv },
   { value: "tmdb", label: "添加影视", icon: Plus },
-  { value: "charts", label: "猫眼榜单", icon: TrendingUp },
+  { value: "charts", label: "全球榜单", icon: TrendingUp },
   { value: "resources", label: "资源搜索", icon: Search },
   { value: "settings", label: "质量与设置", icon: SlidersHorizontal },
 ];
@@ -2302,7 +2303,7 @@ export function MediaPage() {
           onOpenCharts={() => setMode("charts")}
         />
       ) : mode === "charts" ? (
-        <MaoyanRankSection
+        <GlobalRankSection
           onSubscribe={(media) => void openSubscriptionDialog(media)}
           onSearchTitle={(title, type) => {
             // 未匹配到 TMDB 的条目转到“添加影视”手动搜索。
@@ -2428,6 +2429,7 @@ export function MediaPage() {
               sites={sites}
               selected={subscriptionForm.siteIds}
               onChange={(siteIds) => setSubscriptionForm((current) => ({ ...current, siteIds }))}
+              hint="订阅会在这些站点搜索；选好后可在下方手动探测制作组。"
             />
 
             <ReleaseGroupPicker
@@ -2438,7 +2440,6 @@ export function MediaPage() {
               siteIds={subscriptionForm.siteIds}
               policy={subscriptionForm.groupPolicy}
               onChange={(groupPolicy) => setSubscriptionForm((current) => ({ ...current, groupPolicy }))}
-              autoProbe={!configurationUnavailable && missingPrerequisites.length === 0}
               qualityProfileName={profiles.find((profile) => String(profile.id) === subscriptionForm.qualityProfileId)?.name}
             />
 
@@ -2540,6 +2541,7 @@ export function MediaPage() {
               onChange={(siteIds) =>
                 setEditSubscriptionForm((current) => ({ ...current, siteIds }))
               }
+              hint="订阅会在这些站点搜索；选好后可在下方手动探测制作组。"
             />
 
             <ReleaseGroupPicker
@@ -3307,54 +3309,133 @@ function DelimitedField({ id, label, value, onChange }: { id: string; label: str
   );
 }
 
+const SITE_PICKER_SEARCH_THRESHOLD = 8;
+
 function SitePicker({
   sites,
   selected,
   onChange,
-  showSelectAll = false,
+  hint,
 }: {
   sites: Site[];
   selected: number[];
   onChange: (ids: number[]) => void;
-  showSelectAll?: boolean;
+  hint?: string;
 }) {
-  const allSelected = sites.length > 0 && sites.every((site) => selected.includes(site.id));
+  const idPrefix = useId();
+  const [query, setQuery] = useState("");
+  const [onlySelected, setOnlySelected] = useState(false);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const searchable = sites.length > SITE_PICKER_SEARCH_THRESHOLD;
+  const needle = query.trim().toLowerCase();
+  const visible = useMemo(
+    () =>
+      sites.filter((site) => {
+        if (onlySelected && !selectedSet.has(site.id)) return false;
+        if (!needle) return true;
+        return (
+          site.name.toLowerCase().includes(needle) ||
+          site.site_type.toLowerCase().includes(needle) ||
+          site.base_url.toLowerCase().includes(needle)
+        );
+      }),
+    [sites, onlySelected, selectedSet, needle],
+  );
+  const filtered = needle !== "" || onlySelected;
+  const visibleIds = visible.map((site) => site.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
+  const toggle = (id: number) => onChange(selectedSet.has(id) ? selected.filter((value) => value !== id) : [...selected, id]);
+  const selectVisible = () => onChange([...new Set([...selected, ...visibleIds])]);
+  const clearVisible = () => {
+    const hidden = new Set(visibleIds);
+    onChange(selected.filter((id) => !hidden.has(id)));
+  };
+  const invertVisible = () => {
+    const hidden = new Set(visibleIds);
+    onChange([...selected.filter((id) => !hidden.has(id)), ...visibleIds.filter((id) => !selectedSet.has(id))]);
+  };
+  const actionClass = "min-h-8 rounded-full px-2.5 text-xs text-primary transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:text-muted disabled:hover:bg-transparent";
+
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="sr-only">搜索站点</legend>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium" aria-hidden="true">搜索站点</span>
-        {showSelectAll && sites.length > 0 ? (
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
-            <input
-              type="checkbox"
-              className="size-4 accent-primary"
-              checked={allSelected}
-              onChange={() => onChange(allSelected ? [] : sites.map((site) => site.id))}
-            />
-            <span>{allSelected ? "取消全选" : "全选"}</span>
-          </label>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-medium" aria-hidden="true">搜索站点</span>
+          <span className="text-xs text-muted" role="status">已选 {selected.length}/{sites.length}</span>
+        </div>
+        {sites.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-0.5">
+            <button type="button" className={actionClass} disabled={allVisibleSelected} onClick={selectVisible}>
+              {filtered ? "全选筛选结果" : "全选"}
+            </button>
+            <button type="button" className={actionClass} disabled={!visibleIds.some((id) => selectedSet.has(id))} onClick={clearVisible}>
+              {filtered ? "清空筛选结果" : "清空"}
+            </button>
+            <button type="button" className={actionClass} disabled={visibleIds.length === 0} onClick={invertVisible}>反选</button>
+          </div>
         ) : null}
       </div>
+      {hint ? <p className="text-xs text-muted">{hint}</p> : null}
       {sites.length === 0 ? (
         <div className="rounded-2xl border border-border bg-surface-container px-4 py-3 text-sm text-muted">暂无可用站点</div>
       ) : (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {sites.map((site) => {
-            const checked = selected.includes(site.id);
-            return (
-              <label key={site.id} className="flex cursor-pointer items-center gap-3 rounded-2xl border border-border bg-surface-container/45 px-3 py-2.5 text-sm transition-colors hover:bg-accent">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-primary"
-                  checked={checked}
-                  onChange={() => onChange(checked ? selected.filter((id) => id !== site.id) : [...selected, site.id])}
+        <>
+          {searchable ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-0 flex-1 basis-56">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+                <Input
+                  id={`${idPrefix}-site-search`}
+                  aria-label="筛选站点"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.preventDefault();
+                    if (event.key === "Escape" && query) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setQuery("");
+                    }
+                  }}
+                  placeholder="按名称、类型或网址筛选"
+                  className="pl-9"
                 />
-                <span className="min-w-0 truncate">{site.name}</span>
+              </div>
+              <label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm text-muted">
+                <input type="checkbox" className="size-4 accent-primary" checked={onlySelected} onChange={(event) => setOnlySelected(event.target.checked)} />
+                仅看已选
               </label>
-            );
-          })}
-        </div>
+            </div>
+          ) : null}
+          {visible.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-muted">没有匹配的站点</div>
+          ) : (
+            <div className={cn("flex flex-wrap gap-1.5", searchable && "max-h-56 overflow-y-auto rounded-2xl border border-border bg-surface-container/30 p-2")}>
+              {visible.map((site) => {
+                const checked = selectedSet.has(site.id);
+                return (
+                  <button
+                    key={site.id}
+                    type="button"
+                    aria-pressed={checked}
+                    title={site.base_url}
+                    onClick={() => toggle(site.id)}
+                    className={cn(
+                      "inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-full border px-3 text-sm transition-colors",
+                      checked
+                        ? "border-primary bg-accent font-medium text-primary"
+                        : "border-border bg-card text-secondary-foreground hover:bg-accent",
+                    )}
+                  >
+                    {checked ? <CheckCircle2 className="size-3.5 shrink-0" aria-hidden="true" /> : <CircleDashed className="size-3.5 shrink-0 text-muted" aria-hidden="true" />}
+                    <span className="min-w-0 truncate">{site.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </fieldset>
   );
@@ -4199,9 +4280,9 @@ function TmdbPanel({
         <EmptyState icon={Film} title="没有找到匹配影视" action={{ label: "清除搜索", onClick: onClearSearch }} />
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border p-4 text-sm text-muted">
-          <span>不知道追什么？看看猫眼榜单上的热门影视。</span>
+          <span>不知道追什么？看看猫眼、Netflix 榜单上的热门影视。</span>
           <Button variant="outline" className="h-8 px-3" onClick={onOpenCharts}>
-            <TrendingUp data-icon="inline-start" />猫眼榜单
+            <TrendingUp data-icon="inline-start" />全球榜单
           </Button>
         </div>
       )}
@@ -4209,7 +4290,7 @@ function TmdbPanel({
   );
 }
 
-type MaoyanChart = "movie" | "web_movie" | "tv" | "web_series" | "variety";
+type MaoyanChart = "movie" | "web_movie" | "tv" | "web_series" | "variety" | "total" | "year" | "global";
 type MaoyanPlatform = "all" | "tencent" | "iqiyi" | "youku" | "mango";
 type MaoyanRankItem = {
   rank: number;
@@ -4278,7 +4359,11 @@ const MAOYAN_CHARTS: { value: MaoyanChart; label: string; type: MediaType }[] = 
   { value: "web_series", label: "网剧", type: "tv" },
   { value: "variety", label: "综艺", type: "tv" },
   { value: "web_movie", label: "网络电影", type: "movie" },
+  { value: "year", label: "年度票房", type: "movie" },
+  { value: "total", label: "影史票房", type: "movie" },
+  { value: "global", label: "全球票房", type: "movie" },
 ];
+const MAOYAN_PLATFORM_CHARTS: MaoyanChart[] = ["tv", "web_series", "variety"];
 const MAOYAN_PLATFORMS: { value: MaoyanPlatform; label: string }[] = [
   { value: "all", label: "全网" },
   { value: "tencent", label: "腾讯视频" },
@@ -4484,6 +4569,55 @@ function MaoyanDetailDialog({
   );
 }
 
+const GLOBAL_RANK_SOURCES = [
+  { value: "maoyan", label: "猫眼" },
+  { value: "netflix", label: "Netflix" },
+  { value: "hongguo", label: "红果短剧" },
+  { value: "music", label: "音乐" },
+] as const;
+type GlobalRankTab = (typeof GLOBAL_RANK_SOURCES)[number]["value"];
+
+/** 全球榜单：复刻 MoviePilot 插件 GlobalRankPro，猫眼 / Netflix 可订阅，红果短剧与音乐榜只供浏览。 */
+function GlobalRankSection({
+  onSubscribe,
+  onSearchTitle,
+}: {
+  onSubscribe: (media: TmdbMedia) => void;
+  onSearchTitle: (title: string, type: MediaType) => void;
+}) {
+  const [source, setSource] = usePageState<GlobalRankTab>(
+    "media:global-rank:source",
+    "maoyan",
+    oneOf(GLOBAL_RANK_SOURCES.map((item) => item.value)),
+  );
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-surface-container/40 p-1" role="tablist" aria-label="榜单来源">
+        {GLOBAL_RANK_SOURCES.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            role="tab"
+            aria-selected={source === item.value}
+            onClick={() => setSource(item.value)}
+            className={cn(
+              "min-h-9 flex-1 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:flex-none",
+              source === item.value ? "bg-card text-foreground shadow-sm" : "text-muted hover:text-foreground",
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {source === "maoyan" ? (
+        <MaoyanRankSection onSubscribe={onSubscribe} onSearchTitle={onSearchTitle} />
+      ) : (
+        <GlobalRankSource key={source} source={source} onSubscribe={onSubscribe} onSearchTitle={onSearchTitle} />
+      )}
+    </div>
+  );
+}
+
 function MaoyanRankSection({
   onSubscribe,
   onSearchTitle,
@@ -4501,7 +4635,7 @@ function MaoyanRankSection({
   const generation = useRef(0);
   const chartMeta = MAOYAN_CHARTS.find((item) => item.value === chart) ?? MAOYAN_CHARTS[0];
   // 票房榜不分平台；网络电影只有腾讯视频的月度分账数据。
-  const usesPlatform = chart !== "movie" && chart !== "web_movie";
+  const usesPlatform = MAOYAN_PLATFORM_CHARTS.includes(chart);
   const query = `chart=${chart}&platform=${usesPlatform ? platform : "all"}&limit=20`;
 
   // 读取接口只返回后台快照，不会等待抓取；切换榜单时清空，避免误显示上一个榜单。
@@ -4560,7 +4694,11 @@ function MaoyanRankSection({
             {data?.show_date
               ? chart === "web_movie"
                 ? ` 腾讯视频 ${data.show_date.replace(/(\d{4})(\d{2})\d{2}/, "$1-$2")} 月分账榜`
-                : ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}`
+                : chart === "year" || chart === "global"
+                  ? ` ${data.show_date.slice(0, 4)} 年度${chart === "global" ? " · 数据来自 Box Office Mojo" : ""}`
+                  : chart === "total"
+                    ? " 中国内地影史累计票房"
+                    : ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}`
               : ""}
             {fetchedAt ? ` · 更新于 ${fetchedAt}` : ""}
           </p>
@@ -4778,7 +4916,7 @@ function ResourcesPanel({
               <FormSelect label="质量配置" value={form.qualityProfileId} onChange={(qualityProfileId) => setForm((current) => ({ ...current, qualityProfileId }))} options={profiles.map((profile) => ({ value: String(profile.id), label: profile.name }))} />
               <FormSelect label="下载器" value={form.downloaderId} onChange={(downloaderId) => setForm((current) => ({ ...current, downloaderId }))} options={downloaders.map((downloader) => ({ value: String(downloader.id), label: downloader.name }))} />
             </div>
-            <SitePicker sites={sites} selected={form.siteIds} showSelectAll onChange={(siteIds) => setForm((current) => ({ ...current, siteIds }))} />
+            <SitePicker sites={sites} selected={form.siteIds} onChange={(siteIds) => setForm((current) => ({ ...current, siteIds }))} />
             <div className="flex justify-end">
               <Button type="submit" disabled={loading || (!form.query.trim() && !form.subscriptionId) || form.siteIds.length === 0}>
                 {loading ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Search data-icon="inline-start" />}
