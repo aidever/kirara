@@ -16,6 +16,7 @@ use crate::site::{
 use crate::stats::{DownloaderSpeedSnapshot, TaskStatsSnapshot};
 
 mod media;
+mod media_upgrade;
 mod openlist;
 mod ptd_backup;
 pub mod rss;
@@ -28,6 +29,7 @@ pub use openlist::{
     OpenListTargetDirectory,
 };
 pub use ptd_backup::PtdBackupConfig;
+pub use media_upgrade::NewMediaGroupUpgrade;
 
 #[derive(Clone)]
 pub struct Database {
@@ -3154,6 +3156,34 @@ impl Database {
                 )
                 .map_err(sql_error)?;
             }
+            ensure_column(&conn, "subscriptions", "group_policy_json",
+                "ALTER TABLE subscriptions ADD COLUMN group_policy_json TEXT NOT NULL DEFAULT '{}'")?;
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS media_group_upgrades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subscription_id INTEGER NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+                    target_key TEXT NOT NULL,
+                    season INTEGER,
+                    episode INTEGER,
+                    absolute_episode INTEGER,
+                    download_id INTEGER NOT NULL,
+                    current_group TEXT,
+                    current_rank INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'watching',
+                    upgrade_download_id INTEGER,
+                    upgrade_group TEXT,
+                    upgrade_rank INTEGER,
+                    replaced_count INTEGER NOT NULL DEFAULT 0,
+                    last_checked_at TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(subscription_id, target_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_media_group_upgrades_status
+                    ON media_group_upgrades(status, last_checked_at);",
+            )
+            .map_err(sql_error)?;
             let had_tmdb_genres = column_exists(&conn, "subscriptions", "tmdb_genres_json");
             ensure_column(&conn, "subscriptions", "tmdb_genres_json",
                 "ALTER TABLE subscriptions ADD COLUMN tmdb_genres_json TEXT NOT NULL DEFAULT '[]'")?;

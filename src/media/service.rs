@@ -6,7 +6,7 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{Instrument, info, warn};
 
-use crate::db::Database;
+use crate::db::{Database, NewMediaGroupUpgrade};
 use crate::downloader::{AddTorrentOptions, DownloaderClient, DownloaderClientPool};
 use crate::error::AppError;
 use crate::indexer::{
@@ -14,15 +14,18 @@ use crate::indexer::{
 };
 use crate::net::client_factory;
 
+use super::domain::group::{
+    self as group_policy, CandidateGroupInfo, GroupCandidate, GroupPolicy, GroupSelection,
+};
 use super::domain::{
-    DecisionEngine, MatchDecision, MediaTarget, QualityProfile, QueryGenerator, RejectCode,
+    DecisionEngine, IdentityGate, MatchDecision, MediaTarget, QualityProfile, QueryGenerator, RejectCode,
     ReleaseInfo, ReleaseParser, SearchCriteria, SeasonEpisode, SortKey, stable_release_key,
 };
 use super::lease::process_owner_id;
 use super::maoyan::{self, MaoyanChart, MaoyanPlatform, MaoyanRankResponse, MaoyanRankView, MaoyanStore};
 use super::models::{
     MEDIA_DOWNLOAD_RECONCILIATION_GRACE_SECONDS, MediaDownloadCoverage, MediaDownloadDeleteOutcome,
-    MediaDownloadDeletion, MediaDownloadRecord, NewMediaDownload, NewSubscription,
+    MediaDownloadDeletion, MediaDownloadRecord, MediaGroupUpgradeRecord, NewMediaDownload, NewSubscription,
     QualityProfileRecord, SubscriptionRecord, SubscriptionTargetRecord, media_download_category,
 };
 use super::progression::{
@@ -39,6 +42,9 @@ const DOWNLOAD_CONFIRM_INTERVAL: StdDuration = StdDuration::from_millis(300);
 const CANDIDATE_CACHE_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 const CANDIDATE_CACHE_CAPACITY: usize = 2_048;
 const RESOURCE_SEARCH_RESULT_LIMIT: usize = 512;
+const GROUP_UPGRADE_WATCH_DAYS: i64 = 30;
+const GROUP_UPGRADE_DEDUPE_PREFIX: &str = "group-upgrade:";
+const GROUP_UPGRADE_REPLACED_TAG: &str = "云母:已洗版";
 const _: () = assert!(RESOURCE_SEARCH_RESULT_LIMIT <= CANDIDATE_CACHE_CAPACITY);
 
 #[derive(Debug, thiserror::Error)]
@@ -85,6 +91,9 @@ pub struct ResourceCandidate {
     pub parse_error: Option<String>,
     pub decision: Option<MatchDecision>,
     pub sort_key: Option<SortKey>,
+    /// 制作组策略的判定结果（列表位置、规则排除原因）。
+    #[serde(default, flatten)]
+    pub group: CandidateGroupInfo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +119,8 @@ pub struct CreateSubscriptionRequest {
     pub save_path: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub group_policy: GroupPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +156,139 @@ pub struct SubscriptionRunSnapshot {
     pub successful_sites: usize,
     pub best_candidate_id: Option<String>,
     pub error: Option<String>,
+    /// 首选组缺席时，备选版本可以使用的时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_wait_until: Option<String>,
+    /// 制作组挑选结果的说明，供运行详情展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseGroupProbeRequest {
+    pub tmdb_id: i64,
+    pub media_type: String,
+    pub season: Option<u32>,
+    #[serde(default)]
+    pub absolute_numbering: bool,
+    #[serde(default)]
+    pub site_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseGroupSummary {
+    /// 无法识别组名的资源归为 `None`。
+    pub name: Option<String>,
+    pub count: usize,
+    pub sites: Vec<String>,
+    pub episodes: Vec<u32>,
+    pub absolute_episodes: Vec<u32>,
+    pub has_pack: bool,
+    pub resolutions: Vec<String>,
+    pub sources: Vec<String>,
+    pub codecs: Vec<String>,
+    pub hdr_formats: Vec<String>,
+    pub latest_publish: Option<chrono::DateTime<Utc>>,
+    pub size_per_episode: Option<u64>,
+    pub max_seeders: u32,
+    pub median_seeders: u32,
+    pub sample_title: String,
+}
+
+impl ReleaseGroupSummary {
+    fn episode_count(&self) -> usize {
+        self.episodes.len().max(self.absolute_episodes.len())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseGroupProbeResponse {
+    pub queries: Vec<String>,
+    pub matched: usize,
+    pub groups: Vec<ReleaseGroupSummary>,
+    pub errors: Vec<SiteSearchError>,
+    pub total_sites: usize,
+    pub successful_sites: usize,
+    pub probed_at: String,
+}
+
+struct ReleaseGroupBucket {
+    key: String,
+    name: Option<String>,
+    items: Vec<(SearchResult, ReleaseInfo)>,
+}
+
+impl ReleaseGroupBucket {
+    fn summarize(self) -> ReleaseGroupSummary {
+        fn push_unique(values: &mut Vec<String>, value: Option<&str>) {
+            if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty())
+                && !values.iter().any(|existing| existing.eq_ignore_ascii_case(value))
+            {
+                values.push(value.to_string());
+            }
+        }
+        let mut sites = Vec::new();
+        let mut episodes = Vec::new();
+        let mut absolute_episodes = Vec::new();
+        let (mut resolutions, mut sources, mut codecs, mut hdr_formats) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut has_pack = false;
+        let mut sizes = Vec::new();
+        let mut seeders = Vec::new();
+        let mut latest: Option<(chrono::DateTime<Utc>, String)> = None;
+        for (result, release) in &self.items {
+            push_unique(&mut sites, Some(&result.source_site));
+            push_unique(&mut resolutions, release.resolution.as_deref());
+            push_unique(&mut sources, release.source.as_deref());
+            push_unique(&mut codecs, release.codec.as_deref());
+            for hdr in &release.hdr_formats {
+                push_unique(&mut hdr_formats, Some(hdr));
+            }
+            episodes.extend(release.episodes.iter().copied());
+            absolute_episodes.extend(release.absolute_episodes.iter().copied());
+            let units = release.episodes.len().max(release.absolute_episodes.len());
+            if release.full_season || units > 1 {
+                has_pack = true;
+            }
+            if units >= 1 && result.size > 0 {
+                sizes.push(result.size / units as u64);
+            }
+            seeders.push(result.seeders);
+            if let Some(time) = result.publish_time
+                && latest.as_ref().is_none_or(|(latest, _)| time > *latest)
+            {
+                latest = Some((time, result.title.clone()));
+            }
+        }
+        episodes.sort_unstable();
+        episodes.dedup();
+        absolute_episodes.sort_unstable();
+        absolute_episodes.dedup();
+        sizes.sort_unstable();
+        seeders.sort_unstable();
+        let sample_title = latest
+            .as_ref()
+            .map(|(_, title)| title.clone())
+            .or_else(|| self.items.first().map(|(result, _)| result.title.clone()))
+            .unwrap_or_default();
+        ReleaseGroupSummary {
+            name: self.name.filter(|_| !self.key.is_empty()),
+            count: self.items.len(),
+            sites,
+            episodes,
+            absolute_episodes,
+            has_pack,
+            resolutions,
+            sources,
+            codecs,
+            hdr_formats,
+            latest_publish: latest.map(|(time, _)| time),
+            size_per_episode: sizes.get(sizes.len() / 2).copied(),
+            max_seeders: seeders.last().copied().unwrap_or(0),
+            median_seeders: seeders.get(seeders.len() / 2).copied().unwrap_or(0),
+            sample_title,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -650,6 +794,7 @@ impl MediaService {
             site_ids: request.site_ids.clone(),
             save_path: request.save_path.clone(),
             enabled: request.enabled,
+            group_policy: request.group_policy.clone(),
         };
         if let Some(plan) = target_plan {
             let settings = self.db.get_media_settings().await?;
@@ -861,6 +1006,7 @@ impl MediaService {
                         parse_error: None,
                         decision,
                         sort_key,
+                        group: CandidateGroupInfo::default(),
                     });
                 }
                 Err(error) => candidates.push(ResourceCandidate {
@@ -870,6 +1016,7 @@ impl MediaService {
                     parse_error: Some(error.to_string()),
                     decision: None,
                     sort_key: None,
+                    group: CandidateGroupInfo::default(),
                 }),
             }
         }
@@ -1149,12 +1296,31 @@ impl MediaService {
             .iter()
             .filter(|candidate| candidate.decision.as_ref().is_some_and(|d| d.accepted))
             .count();
-        let best = search.candidates.iter().find(|candidate| {
-            candidate
-                .decision
-                .as_ref()
-                .is_some_and(|decision| decision.accepted)
-        });
+        let now = Utc::now();
+        let (selection, group_info) = {
+            let facts: Vec<GroupCandidate<'_>> = search
+                .candidates
+                .iter()
+                .map(group_candidate)
+                .collect();
+            group_policy::select(&subscription.group_policy, &facts, now)
+        };
+        for (candidate, info) in search.candidates.iter_mut().zip(group_info) {
+            candidate.group = info;
+        }
+        let (best_index, picked_rank, wait) = match selection {
+            GroupSelection::Pick { index, rank } => (Some(index), rank, None),
+            GroupSelection::Wait { index, rank, until } => (None, rank, Some((index, until))),
+            GroupSelection::Nothing => (None, None, None),
+        };
+        let best = best_index.map(|index| &search.candidates[index]);
+        let group_note = group_selection_note(
+            &subscription.group_policy,
+            &search.candidates,
+            best_index,
+            picked_rank,
+            wait.map(|(index, _)| index),
+        );
         let snapshot = SubscriptionRunSnapshot {
             started_at: started_at.to_string(),
             finished_at: Utc::now().to_rfc3339(),
@@ -1166,6 +1332,8 @@ impl MediaService {
             successful_sites: search.successful_sites,
             best_candidate_id: best.map(|candidate| candidate.candidate_id.clone()),
             error: None,
+            group_wait_until: wait.map(|(_, until)| until.to_rfc3339()),
+            group_note,
         };
         self.save_claimed_run_snapshot(subscription.id, owner, &snapshot)
             .await?;
@@ -1209,14 +1377,45 @@ impl MediaService {
                         "subscription lease or target changed before queueing".to_string(),
                     )
                 })?;
+            let policy = &subscription.group_policy;
+            if policy.is_active() && policy.upgrade && picked_rank != Some(0) {
+                let watch = NewMediaGroupUpgrade {
+                    subscription_id: subscription.id,
+                    target_key: target_key.clone(),
+                    season: subscription.season,
+                    episode: subscription.next_episode,
+                    absolute_episode: subscription.absolute_episode,
+                    download_id: download.id,
+                    current_group: best
+                        .release
+                        .as_ref()
+                        .and_then(|release| release.release_group.clone()),
+                    current_rank: policy.upgrade_rank(picked_rank),
+                };
+                if let Err(error) = self.db.watch_media_group_upgrade(watch).await {
+                    warn!(subscription_id = subscription.id, %error, "failed to record group upgrade watch");
+                }
+            }
             Some(download)
         } else {
             None
         };
         let status = if download.is_some() {
             "queued"
+        } else if wait.is_some() {
+            "waiting_group"
         } else {
             "waiting"
+        };
+        let next_run_at = match wait {
+            Some((_, until)) if download.is_none() => {
+                let until = until + Duration::minutes(1);
+                match chrono::DateTime::parse_from_rfc3339(&next_run_at) {
+                    Ok(scheduled) if scheduled.with_timezone(&Utc) > until => until.to_rfc3339(),
+                    _ => next_run_at,
+                }
+            }
+            _ => next_run_at,
         };
         let error_summary = if download.is_none() && !search.errors.is_empty() {
             Some(
@@ -2110,7 +2309,15 @@ impl MediaService {
         &self,
         download: &MediaDownloadRecord,
     ) -> Result<AddTorrentOptions, MediaServiceError> {
-        let subscription = match download.subscription_id {
+        // 洗版下载不挂在订阅目标上，但仍沿用订阅的保存路径和分类。
+        let subscription_id = download.subscription_id.or_else(|| {
+            download
+                .dedupe_key
+                .strip_prefix(GROUP_UPGRADE_DEDUPE_PREFIX)
+                .and_then(|rest| rest.split(':').next())
+                .and_then(|id| id.parse().ok())
+        });
+        let subscription = match subscription_id {
             Some(subscription_id) => self.db.get_subscription(subscription_id).await?,
             None => None,
         };
@@ -2468,6 +2675,367 @@ impl MediaService {
         Ok((adapters, errors, priorities))
     }
 
+    /// 探测某部剧在所选站点上有哪些制作组的资源，供创建订阅时挑选。
+    pub async fn probe_release_groups(
+        &self,
+        request: &ReleaseGroupProbeRequest,
+    ) -> Result<ReleaseGroupProbeResponse, MediaServiceError> {
+        if request.site_ids.is_empty() {
+            return Err(MediaServiceError::Invalid(
+                "at least one PT site must be selected".to_string(),
+            ));
+        }
+        let media_type = TmdbMediaType::parse(&request.media_type)?;
+        let details = self.tmdb_details(request.tmdb_id, media_type.clone()).await?;
+        let mut titles = vec![details.media.title.clone()];
+        if let Some(original) = &details.media.original_title {
+            push_case_insensitive(&mut titles, original);
+        }
+        for alias in &details.aliases {
+            push_case_insensitive(&mut titles, alias);
+        }
+        let target = if media_type == TmdbMediaType::Movie {
+            MediaTarget::Movie {
+                tmdb_id: request.tmdb_id,
+                titles: titles.clone(),
+                year: details.media.year,
+            }
+        } else if request.absolute_numbering {
+            MediaTarget::Anime {
+                tmdb_id: request.tmdb_id,
+                titles: titles.clone(),
+                year: None,
+                absolute_episode: 0,
+                season_episode: request
+                    .season
+                    .map(|season| SeasonEpisode { season, episode: 0 }),
+            }
+        } else {
+            MediaTarget::Episode {
+                tmdb_id: request.tmdb_id,
+                titles: titles.clone(),
+                year: None,
+                season: request.season.unwrap_or(1),
+                episode: 0,
+                allow_season_pack: true,
+            }
+        };
+        let settings = self.db.get_media_settings().await?;
+        let mut queries: Vec<String> = Vec::new();
+        for title in titles.iter().take(3) {
+            let title = title.trim();
+            if title.is_empty() {
+                continue;
+            }
+            push_case_insensitive(&mut queries, title);
+            if let Some(season) = request.season.filter(|season| *season > 1) {
+                push_case_insensitive(&mut queries, &format!("{title} S{season:02}"));
+            }
+        }
+        queries.truncate(settings.max_search_queries.clamp(1, 6));
+        let search_requests: Vec<_> = queries
+            .iter()
+            .map(|query| SearchRequest {
+                query: query.clone(),
+                page: 1,
+                page_size: 100,
+            })
+            .collect();
+        let (indexers, mut errors, _) = self.resolve_indexers(&request.site_ids).await?;
+        let aggregate = IndexerAggregator::new(settings.search_concurrency)
+            .search(&indexers, &search_requests)
+            .await;
+        errors.extend(aggregate.errors.clone());
+
+        let mut seen = HashSet::new();
+        let mut buckets: Vec<ReleaseGroupBucket> = Vec::new();
+        let mut matched = 0usize;
+        for result in aggregate.results {
+            if !seen.insert((result.site_id, result.torrent_id.clone())) {
+                continue;
+            }
+            let Ok(release) = self.parser.parse(&result.title) else {
+                continue;
+            };
+            if !IdentityGate::matches_series(&target, &release) {
+                continue;
+            }
+            matched += 1;
+            let key = release
+                .release_group
+                .as_deref()
+                .map(group_policy::normalize_group)
+                .unwrap_or_default();
+            let bucket = match buckets.iter_mut().position(|bucket| bucket.key == key) {
+                Some(index) => &mut buckets[index],
+                None => {
+                    buckets.push(ReleaseGroupBucket {
+                        key,
+                        name: release.release_group.clone(),
+                        items: Vec::new(),
+                    });
+                    buckets.last_mut().expect("bucket was just pushed")
+                }
+            };
+            bucket.items.push((result, release));
+        }
+        let mut groups: Vec<ReleaseGroupSummary> =
+            buckets.into_iter().map(ReleaseGroupBucket::summarize).collect();
+        groups.sort_by(|left, right| {
+            left.name
+                .is_none()
+                .cmp(&right.name.is_none())
+                .then_with(|| right.episode_count().cmp(&left.episode_count()))
+                .then_with(|| right.latest_publish.cmp(&left.latest_publish))
+                .then_with(|| right.count.cmp(&left.count))
+        });
+        Ok(ReleaseGroupProbeResponse {
+            queries,
+            matched,
+            groups,
+            errors,
+            total_sites: aggregate.total_sites,
+            successful_sites: aggregate.successful_sites,
+            probed_at: Utc::now().to_rfc3339(),
+        })
+    }
+
+    pub async fn list_group_upgrades(
+        &self,
+        subscription_id: i64,
+    ) -> Result<Vec<MediaGroupUpgradeRecord>, MediaServiceError> {
+        Ok(self.db.list_media_group_upgrades(subscription_id).await?)
+    }
+
+    /// 洗版巡检：检查等待更好版本的剧集，并处理已完成下载的新版本。
+    pub async fn process_group_upgrades(&self, limit: usize) -> Result<usize, MediaServiceError> {
+        let settings = self.db.get_media_settings().await?;
+        let checked_before =
+            (Utc::now() - Duration::minutes(settings.scan_interval_mins.max(5) as i64)).to_rfc3339();
+        let due = self
+            .db
+            .list_due_media_group_upgrades(&checked_before, limit)
+            .await?;
+        let mut processed = 0;
+        for record in due {
+            let id = record.id;
+            if let Err(error) = self.process_group_upgrade(record).await {
+                warn!(upgrade_id = id, %error, "group upgrade check failed");
+                if let Some(mut record) = self.db.get_media_group_upgrade(id).await? {
+                    record.last_checked_at = Some(Utc::now().to_rfc3339());
+                    record.last_error = Some(error.to_string());
+                    self.db.save_media_group_upgrade(&record).await?;
+                }
+            }
+            processed += 1;
+        }
+        Ok(processed)
+    }
+
+    async fn process_group_upgrade(
+        &self,
+        mut record: MediaGroupUpgradeRecord,
+    ) -> Result<(), MediaServiceError> {
+        let now = Utc::now();
+        let Some(subscription) = self.db.get_subscription(record.subscription_id).await? else {
+            return Ok(());
+        };
+        let policy = &subscription.group_policy;
+        if record.status == "upgrading" {
+            return self.finish_group_upgrade(record, &subscription).await;
+        }
+        record.last_checked_at = Some(now.to_rfc3339());
+        record.last_error = None;
+        if !policy.is_active() || !policy.upgrade {
+            record.status = "cancelled".to_string();
+            self.db.save_media_group_upgrade(&record).await?;
+            return Ok(());
+        }
+        let current_rank = policy.upgrade_rank(policy.rank_of(record.current_group.as_deref()));
+        record.current_rank = current_rank;
+        if current_rank == 0 {
+            record.status = "done".to_string();
+            self.db.save_media_group_upgrade(&record).await?;
+            return Ok(());
+        }
+        let expired = chrono::DateTime::parse_from_rfc3339(&record.created_at)
+            .map(|created| now - created.with_timezone(&Utc) > Duration::days(GROUP_UPGRADE_WATCH_DAYS))
+            .unwrap_or(false);
+        if expired {
+            record.status = "expired".to_string();
+            self.db.save_media_group_upgrade(&record).await?;
+            return Ok(());
+        }
+        let mut probe = subscription.clone();
+        probe.season = record.season;
+        probe.next_episode = record.episode;
+        probe.absolute_episode = record.absolute_episode;
+        let target = subscription_target(&probe)?;
+        let search = self
+            .search_resources_uncached(&ResourceSearchRequest {
+                query: None,
+                site_ids: subscription.site_ids.clone(),
+                target: Some(target.clone()),
+                quality_profile_id: Some(subscription.quality_profile_id),
+                page_size: Some(50),
+            })
+            .await?;
+        let facts: Vec<GroupCandidate<'_>> = search.candidates.iter().map(group_candidate).collect();
+        let Some((index, rank)) = group_policy::select_upgrade(policy, &facts, current_rank) else {
+            self.db.save_media_group_upgrade(&record).await?;
+            return Ok(());
+        };
+        let best = &search.candidates[index];
+        let profile = self
+            .db
+            .get_quality_profile(subscription.quality_profile_id)
+            .await?
+            .ok_or_else(|| {
+                MediaServiceError::NotFound(format!(
+                    "quality profile {}",
+                    subscription.quality_profile_id
+                ))
+            })?;
+        let downloader = self
+            .db
+            .get_downloader(subscription.downloader_id)
+            .await?
+            .ok_or_else(|| {
+                MediaServiceError::NotFound(format!("downloader {}", subscription.downloader_id))
+            })?;
+        let decision = best
+            .decision
+            .as_ref()
+            .expect("accepted upgrade candidate has decision");
+        let download = self
+            .db
+            .enqueue_media_download(&NewMediaDownload {
+                subscription_id: None,
+                target_key: record.target_key.clone(),
+                dedupe_key: format!(
+                    "{GROUP_UPGRADE_DEDUPE_PREFIX}{}:{}:{}:{}",
+                    subscription.id, record.id, best.result.site_id, best.result.torrent_id
+                ),
+                site_id: Some(best.result.site_id),
+                downloader_id: Some(subscription.downloader_id),
+                source_site: best.result.source_site.clone(),
+                downloader_name: downloader.name,
+                torrent_id: best.result.torrent_id.clone(),
+                title: best.result.title.clone(),
+                size: best.result.size,
+                release_json: to_json(&best.result)?,
+                decision_json: to_json(decision)?,
+                profile_snapshot_json: to_json(&profile)?,
+            })
+            .await?;
+        info!(
+            subscription_id = subscription.id,
+            target_key = %record.target_key,
+            from = ?record.current_group,
+            to = %candidate_group_label(best),
+            "queued group upgrade"
+        );
+        record.status = "upgrading".to_string();
+        record.upgrade_download_id = Some(download.id);
+        record.upgrade_group = best
+            .release
+            .as_ref()
+            .and_then(|release| release.release_group.clone());
+        record.upgrade_rank = Some(rank as u32);
+        self.db.save_media_group_upgrade(&record).await?;
+        Ok(())
+    }
+
+    async fn finish_group_upgrade(
+        &self,
+        mut record: MediaGroupUpgradeRecord,
+        subscription: &SubscriptionRecord,
+    ) -> Result<(), MediaServiceError> {
+        let upgrade = match record.upgrade_download_id {
+            Some(id) => self.db.get_media_download(id).await?,
+            None => None,
+        };
+        let Some(upgrade) = upgrade else {
+            record.status = "watching".to_string();
+            record.upgrade_download_id = None;
+            record.upgrade_group = None;
+            record.upgrade_rank = None;
+            record.last_error = Some("洗版下载记录已删除".to_string());
+            self.db.save_media_group_upgrade(&record).await?;
+            return Ok(());
+        };
+        match upgrade.status.as_str() {
+            "submitted" => {}
+            "failed" | "cancelled" => {
+                record.status = "watching".to_string();
+                record.last_checked_at = Some(Utc::now().to_rfc3339());
+                record.last_error = Some(
+                    upgrade
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| "洗版下载失败".to_string()),
+                );
+                record.upgrade_download_id = None;
+                record.upgrade_group = None;
+                record.upgrade_rank = None;
+                self.db.save_media_group_upgrade(&record).await?;
+                return Ok(());
+            }
+            _ => return Ok(()),
+        }
+        let replaced_error = match self.db.get_media_download(record.download_id).await? {
+            Some(old) => self
+                .retire_replaced_download(&old, subscription.group_policy.delete_replaced)
+                .await
+                .err()
+                .map(|error| error.to_string()),
+            None => None,
+        };
+        let rank = record.upgrade_rank.unwrap_or(record.current_rank);
+        record.download_id = upgrade.id;
+        record.current_group = record.upgrade_group.take();
+        record.current_rank = rank;
+        record.upgrade_download_id = None;
+        record.upgrade_rank = None;
+        record.replaced_count += 1;
+        record.last_error = replaced_error;
+        record.status = if rank == 0 { "done" } else { "watching" }.to_string();
+        self.db.save_media_group_upgrade(&record).await?;
+        Ok(())
+    }
+
+    /// 新版本已添加到下载器后处理旧版本：删除种子和文件，或保留做种并打标签。
+    async fn retire_replaced_download(
+        &self,
+        old: &MediaDownloadRecord,
+        delete_files: bool,
+    ) -> Result<(), MediaServiceError> {
+        let (Some(downloader_id), Some(infohash)) = (old.downloader_id, old.infohash.as_deref())
+        else {
+            return Ok(());
+        };
+        let Some(downloader) = self.db.get_downloader(downloader_id).await? else {
+            return Ok(());
+        };
+        let client = self
+            .downloaders
+            .get(&downloader)
+            .await
+            .map_err(MediaServiceError::Downloader)?;
+        if delete_files {
+            client
+                .delete_torrent(infohash, true)
+                .await
+                .map_err(MediaServiceError::Downloader)?;
+        } else {
+            client
+                .add_torrent_tags(vec![infohash.to_string()], vec![GROUP_UPGRADE_REPLACED_TAG.to_string()])
+                .await
+                .map_err(MediaServiceError::Downloader)?;
+        }
+        Ok(())
+    }
+
     async fn ensure_references(
         &self,
         quality_profile_id: i64,
@@ -2741,6 +3309,8 @@ fn empty_run_snapshot(started_at: &str, target_key: &str) -> SubscriptionRunSnap
         successful_sites: 0,
         best_candidate_id: None,
         error: None,
+        group_wait_until: None,
+        group_note: None,
     }
 }
 
@@ -2796,6 +3366,79 @@ fn subscription_target(
         })?,
         allow_season_pack: false,
     })
+}
+
+fn group_candidate(candidate: &ResourceCandidate) -> GroupCandidate<'_> {
+    GroupCandidate {
+        accepted: candidate
+            .decision
+            .as_ref()
+            .is_some_and(|decision| decision.accepted),
+        release_group: candidate
+            .release
+            .as_ref()
+            .and_then(|release| release.release_group.as_deref()),
+        title: &candidate.result.title,
+        publish_time: candidate.result.publish_time,
+    }
+}
+
+fn candidate_group_label(candidate: &ResourceCandidate) -> String {
+    candidate
+        .release
+        .as_ref()
+        .and_then(|release| release.release_group.clone())
+        .unwrap_or_else(|| "未识别制作组".to_string())
+}
+
+/// 运行详情里的一句话说明：选了谁、为什么，或者在等谁。
+fn group_selection_note(
+    policy: &GroupPolicy,
+    candidates: &[ResourceCandidate],
+    picked: Option<usize>,
+    rank: Option<usize>,
+    waiting: Option<usize>,
+) -> Option<String> {
+    let accepted = candidates
+        .iter()
+        .filter(|candidate| candidate.decision.as_ref().is_some_and(|d| d.accepted))
+        .count();
+    let filtered = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.decision.as_ref().is_some_and(|d| d.accepted)
+                && candidate.group.group_filtered.is_some()
+        })
+        .count();
+    if !policy.is_active() {
+        return (picked.is_none() && filtered > 0)
+            .then(|| format!("{filtered} 个可用资源被包含/排除规则过滤"));
+    }
+    let primary = &policy.groups[0];
+    if let Some(index) = waiting {
+        return Some(format!(
+            "首选组 {primary} 尚未发布，等待结束后使用 {}",
+            candidate_group_label(&candidates[index])
+        ));
+    }
+    match (picked, rank) {
+        (Some(_), Some(0)) => Some(format!("使用首选组 {primary}")),
+        (Some(index), Some(rank)) => Some(format!(
+            "首选组 {primary} 未发布，使用备选 {rank}：{}",
+            candidate_group_label(&candidates[index])
+        )),
+        (Some(index), None) => Some(format!(
+            "列表内制作组均未发布，按质量兜底使用 {}",
+            candidate_group_label(&candidates[index])
+        )),
+        (None, _) if accepted == 0 => None,
+        (None, _) if filtered == accepted => {
+            Some(format!("{filtered} 个可用资源被包含/排除规则过滤"))
+        }
+        (None, _) => Some(format!(
+            "{accepted} 个可用资源都不在制作组列表内，按设置不下载"
+        )),
+    }
 }
 
 fn profile_to_domain(profile: &QualityProfileRecord) -> QualityProfile {
@@ -3641,6 +4284,7 @@ mod tests {
         let subscription = db
             .create_subscription_with_targets(
                 &NewSubscription {
+                    group_policy: Default::default(),
                     tmdb_id,
                     media_type: "tv".to_string(),
                     tmdb_is_animation: false,
@@ -4432,6 +5076,7 @@ mod tests {
             parse_error: None,
             decision: Some(original_decision),
             sort_key: None,
+            group: CandidateGroupInfo::default(),
         }];
 
         reevaluate_resource_candidates(&translated_target, &mut candidates, &profile);
@@ -4443,6 +5088,7 @@ mod tests {
     #[test]
     fn subscription_target_uses_absolute_episode_when_configured() {
         let mut subscription = SubscriptionRecord {
+            group_policy: Default::default(),
             id: 1,
             tmdb_id: 2,
             media_type: "tv".to_string(),
@@ -4531,6 +5177,7 @@ mod tests {
         let (_dir, service, db, site_id, _other_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "tv".to_string(),
                 tmdb_is_animation: false,
@@ -4616,6 +5263,7 @@ mod tests {
         let (_dir, service, db, site_id, other_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "tv".to_string(),
                 tmdb_is_animation: false,
@@ -4850,6 +5498,7 @@ mod tests {
         let subscription = db
             .create_subscription_with_targets(
                 &NewSubscription {
+                    group_policy: Default::default(),
                     tmdb_id: 42,
                     media_type: "tv".to_string(),
                     tmdb_is_animation: false,
@@ -4936,6 +5585,177 @@ mod tests {
                     .find(|candidate| { candidate.result.torrent_id == download.torrent_id }))
                 .map(|candidate| candidate.candidate_id.clone())
         );
+    }
+
+    async fn group_policy_subscription(
+        db: &Database,
+        site_id: i64,
+        downloader_id: i64,
+        policy: GroupPolicy,
+    ) -> SubscriptionRecord {
+        let target_key = crate::media::models::target_key("tv", 42, Some(1), Some(3), None);
+        db.create_subscription_with_targets(
+            &NewSubscription {
+                group_policy: policy,
+                tmdb_id: 42,
+                media_type: "tv".to_string(),
+                tmdb_is_animation: false,
+                tmdb_genres: Vec::new(),
+                title: "Example Show".to_string(),
+                original_title: None,
+                aliases: Vec::new(),
+                year: None,
+                poster_path: None,
+                season: Some(1),
+                start_episode: Some(3),
+                absolute_episode: None,
+                quality_profile_id: 1,
+                downloader_id,
+                site_ids: vec![site_id],
+                save_path: None,
+                enabled: true,
+            },
+            &[crate::media::progression::SubscriptionTargetSeed {
+                target_key,
+                season: 1,
+                episode: 3,
+                absolute_episode: None,
+                air_date: Some("2020-01-01".to_string()),
+                status: SubscriptionTargetSeedStatus::Pending,
+            }],
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    fn published(mut result: SearchResult, hours_ago: i64) -> SearchResult {
+        result.publish_time = Some(Utc::now() - Duration::hours(hours_ago));
+        result
+    }
+
+    #[tokio::test]
+    async fn subscription_waits_for_the_primary_group_before_using_a_backup() {
+        let (_dir, service, db, site, _second_site, downloader_id) = test_service().await;
+        let policy = GroupPolicy {
+            groups: vec!["CHDWEB".into(), "HHWEB".into()],
+            wait_hours: 6,
+            ..GroupPolicy::default()
+        };
+        let subscription = group_policy_subscription(&db, site, downloader_id, policy).await;
+        install_query_aware_indexer(
+            &service,
+            &db,
+            site,
+            HashMap::new(),
+            Ok(vec![published(
+                episode_search_result(site, "backup", "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB"),
+                1,
+            )]),
+        )
+        .await;
+
+        let run = service.run_subscription(subscription.id).await.unwrap();
+        assert!(run.download.is_none());
+        let snapshot = service
+            .get_subscription_last_run(subscription.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.group_wait_until.is_some());
+        assert_eq!(snapshot.candidates[0].group.group_rank, Some(1));
+        let stored = db.get_subscription(subscription.id).await.unwrap().unwrap();
+        assert_eq!(stored.last_status.as_deref(), Some("waiting_group"));
+        assert!(db.list_media_group_upgrades(subscription.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn backup_download_after_the_wait_is_watched_for_an_upgrade() {
+        let (_dir, service, db, site, _second_site, downloader_id) = test_service().await;
+        let policy = GroupPolicy {
+            groups: vec!["CHDWEB".into(), "HHWEB".into()],
+            wait_hours: 6,
+            ..GroupPolicy::default()
+        };
+        let subscription = group_policy_subscription(&db, site, downloader_id, policy).await;
+        install_query_aware_indexer(
+            &service,
+            &db,
+            site,
+            HashMap::new(),
+            Ok(vec![
+                published(
+                    episode_search_result(site, "outside", "Example.Show.S01E03.2160p.WEB-DL.H265-Other"),
+                    8,
+                ),
+                published(
+                    episode_search_result(site, "backup", "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB"),
+                    2,
+                ),
+            ]),
+        )
+        .await;
+
+        let run = service.run_subscription(subscription.id).await.unwrap();
+        assert_eq!(
+            run.download.as_ref().map(|download| download.torrent_id.as_str()),
+            Some("backup")
+        );
+        let upgrades = db.list_media_group_upgrades(subscription.id).await.unwrap();
+        assert_eq!(upgrades.len(), 1);
+        assert_eq!(upgrades[0].current_group.as_deref(), Some("HHWEB"));
+        assert_eq!(upgrades[0].current_rank, 1);
+        assert_eq!(upgrades[0].status, "watching");
+    }
+
+    #[tokio::test]
+    async fn primary_group_release_is_queued_as_an_upgrade() {
+        let (_dir, service, db, site, _second_site, downloader_id) = test_service().await;
+        let policy = GroupPolicy {
+            groups: vec!["CHDWEB".into(), "HHWEB".into()],
+            wait_hours: 0,
+            ..GroupPolicy::default()
+        };
+        let subscription = group_policy_subscription(&db, site, downloader_id, policy).await;
+        install_query_aware_indexer(
+            &service,
+            &db,
+            site,
+            HashMap::new(),
+            Ok(vec![episode_search_result(
+                site,
+                "backup",
+                "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB",
+            )]),
+        )
+        .await;
+        service.run_subscription(subscription.id).await.unwrap();
+        install_query_aware_indexer(
+            &service,
+            &db,
+            site,
+            HashMap::new(),
+            Ok(vec![
+                episode_search_result(site, "backup", "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB"),
+                episode_search_result(site, "primary", "Example.Show.S01E03.1080p.WEB-DL.H264-CHDWEB"),
+            ]),
+        )
+        .await;
+
+        assert_eq!(service.process_group_upgrades(5).await.unwrap(), 1);
+        let upgrade = db.list_media_group_upgrades(subscription.id).await.unwrap().remove(0);
+        assert_eq!(upgrade.status, "upgrading");
+        assert_eq!(upgrade.upgrade_group.as_deref(), Some("CHDWEB"));
+        assert_eq!(upgrade.upgrade_rank, Some(0));
+        let queued = db
+            .get_media_download(upgrade.upgrade_download_id.unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(queued.torrent_id, "primary");
+        assert!(queued.subscription_id.is_none());
+        assert!(queued.dedupe_key.starts_with(GROUP_UPGRADE_DEDUPE_PREFIX));
     }
 
     #[tokio::test]
@@ -5159,6 +5979,7 @@ mod tests {
         let (_dir, service, db, first_site, _second_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "movie".to_string(),
                 tmdb_is_animation: false,
@@ -5225,6 +6046,7 @@ mod tests {
         let (_dir, service, db, first_site, _second_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "movie".to_string(),
                 tmdb_is_animation: false,

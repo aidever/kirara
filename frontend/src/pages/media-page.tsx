@@ -55,6 +55,17 @@ import {
 } from "@/components/openlist-automation-panel";
 import { api, ApiError } from "@/lib/api";
 import {
+  DEFAULT_GROUP_POLICY,
+  GroupChain,
+  GroupUpgradeList,
+  ReleaseGroupPicker,
+  cleanGroupPolicy,
+  formatRelative,
+  normalizeGroupPolicy,
+  type GroupPolicy,
+  type GroupUpgradeRecord,
+} from "@/components/media/release-group-picker";
+import {
   matchesLocalResourceQuery,
   parseLocalReleaseScope,
   type LocalReleaseScope,
@@ -113,6 +124,7 @@ type Subscription = {
   start_episode: number | null;
   absolute_episode: number | null;
   quality_profile_id: number;
+  group_policy?: GroupPolicy;
   downloader_id: number;
   site_ids: number[];
   save_path: string | null;
@@ -188,6 +200,8 @@ type SubscriptionRunSnapshot = {
   successful_sites: number;
   best_candidate_id: string | null;
   error: string | null;
+  group_wait_until: string | null;
+  group_note: string | null;
 };
 
 type TmdbMedia = {
@@ -318,6 +332,8 @@ type ResourceCandidate = {
   parseError: string | null;
   decision: MatchDecision | null;
   sortKey: CandidateSortKey | null;
+  groupRank: number | null;
+  groupFiltered: string | null;
   rank: number;
   raw: Record<string, unknown>;
 };
@@ -356,6 +372,7 @@ type SubscriptionForm = {
   downloaderId: string;
   siteIds: number[];
   savePath: string;
+  groupPolicy: GroupPolicy;
 };
 
 type ResourceForm = {
@@ -417,6 +434,7 @@ const EMPTY_SUBSCRIPTION_FORM: SubscriptionForm = {
   downloaderId: "",
   siteIds: [],
   savePath: "",
+  groupPolicy: DEFAULT_GROUP_POLICY,
 };
 
 const EMPTY_SEASON_METADATA: SeasonMetadataState = {
@@ -759,6 +777,7 @@ function subscriptionStatus(subscription: Subscription): { label: string; tone: 
   if (status === "queued") return { label: "已入队", tone: "positive" };
   if (status === "submitted") return { label: "已提交下载器", tone: "positive" };
   if (status === "waiting_air_date") return { label: "待播出", tone: "neutral" };
+  if (status === "waiting_group") return { label: "等待首选制作组", tone: "neutral" };
   if (status === "awaiting_metadata") return { label: "等待 TMDB 更新", tone: "neutral" };
   return { label: "等待扫描", tone: "neutral" };
 }
@@ -1003,6 +1022,8 @@ function normalizeCandidate(value: unknown, index: number): ResourceCandidate | 
     parseError: value.parse_error == null ? null : describeUnknown(value.parse_error),
     decision,
     sortKey,
+    groupRank: typeof value.group_rank === "number" ? value.group_rank : null,
+    groupFiltered: optionalString(value.group_filtered),
     rank: numberValue(value.rank, index + 1),
     raw: value,
   };
@@ -1034,6 +1055,8 @@ function normalizeRunSnapshot(value: unknown): SubscriptionRunSnapshot {
     successful_sites: numberValue(value.successful_sites),
     best_candidate_id: optionalString(value.best_candidate_id),
     error: optionalString(value.error),
+    group_wait_until: optionalString(value.group_wait_until),
+    group_note: optionalString(value.group_note),
   };
 }
 
@@ -1149,6 +1172,7 @@ export function MediaPage() {
   const [deleteDownloadError, setDeleteDownloadError] = useState("");
   const [runDetailsSubscription, setRunDetailsSubscription] = useState<Subscription | null>(null);
   const [runDetails, setRunDetails] = useState<SubscriptionRunSnapshot | null>(null);
+  const [runUpgrades, setRunUpgrades] = useState<GroupUpgradeRecord[]>([]);
   const [runDetailsLoading, setRunDetailsLoading] = useState(false);
   const [runDetailsError, setRunDetailsError] = useState("");
 
@@ -1515,6 +1539,7 @@ export function MediaPage() {
       downloaderId: String(subscription.downloader_id),
       siteIds: subscription.site_ids,
       savePath: subscription.save_path ?? "",
+      groupPolicy: normalizeGroupPolicy(subscription.group_policy),
     });
     if (subscription.media_type === "tv") {
       void loadEditDetails(subscription);
@@ -1559,6 +1584,7 @@ export function MediaPage() {
           downloader_id: Number(editSubscriptionForm.downloaderId),
           site_ids: editSubscriptionForm.siteIds,
           save_path: editSubscriptionForm.savePath.trim() || null,
+          group_policy: cleanGroupPolicy(editSubscriptionForm.groupPolicy),
           enabled: editingSubscription.enabled,
           reset_download_history: clearingHistory,
         }),
@@ -1726,6 +1752,10 @@ export function MediaPage() {
   async function openRunDetails(subscription: Subscription) {
     setRunDetailsSubscription(subscription);
     setRunDetails(null);
+    setRunUpgrades([]);
+    void api<GroupUpgradeRecord[]>(`/api/media/subscriptions/${subscription.id}/group-upgrades`)
+      .then((rows) => setRunUpgrades(Array.isArray(rows) ? rows : []))
+      .catch(() => setRunUpgrades([]));
     setRunDetailsError("");
     setRunDetailsLoading(true);
     try {
@@ -1819,6 +1849,7 @@ export function MediaPage() {
       downloaderId: String(downloaders[0]?.id ?? ""),
       siteIds: sites.map((site) => site.id),
       savePath: "",
+      groupPolicy: { ...DEFAULT_GROUP_POLICY },
     });
     void loadCreateDetails(media);
     if (media.media_type === "tv") {
@@ -1874,6 +1905,7 @@ export function MediaPage() {
           downloader_id: Number(subscriptionForm.downloaderId),
           site_ids: subscriptionForm.siteIds,
           save_path: subscriptionForm.savePath.trim() || null,
+          group_policy: cleanGroupPolicy(subscriptionForm.groupPolicy),
           enabled: true,
         }),
       });
@@ -2342,6 +2374,8 @@ export function MediaPage() {
           error={runDetailsError}
           subscriptionId={runDetailsSubscription?.id ?? null}
           downloads={downloads}
+          groupPolicy={runDetailsSubscription ? normalizeGroupPolicy(runDetailsSubscription.group_policy) : null}
+          upgrades={runUpgrades}
         />
       </Dialog>
 
@@ -2349,9 +2383,9 @@ export function MediaPage() {
         open={selectedMedia !== null}
         onClose={closeSubscriptionDialog}
         title={selectedMedia ? `订阅「${selectedMedia.title}」` : "创建订阅"}
-        description={selectedMedia?.media_type === "movie" ? "电影订阅" : "剧集订阅"}
+        description={selectedMedia?.media_type === "movie" ? "电影订阅 · 选择制作组和下载设置" : "剧集订阅 · 选择追更的制作组"}
         escMode="double"
-        panelClassName="max-w-3xl"
+        panelClassName="max-w-6xl"
       >
         {selectedMedia ? (
           <div className="flex flex-col gap-5 p-4 sm:p-6">
@@ -2390,13 +2424,34 @@ export function MediaPage() {
               />
             ) : null}
 
+            <SitePicker
+              sites={sites}
+              selected={subscriptionForm.siteIds}
+              onChange={(siteIds) => setSubscriptionForm((current) => ({ ...current, siteIds }))}
+            />
+
+            <ReleaseGroupPicker
+              tmdbId={selectedMedia.tmdb_id}
+              mediaType={selectedMedia.media_type}
+              season={selectedMedia.media_type === "tv" ? subscriptionForm.season : null}
+              absoluteNumbering={subscriptionForm.numberingMode === "absolute"}
+              siteIds={subscriptionForm.siteIds}
+              policy={subscriptionForm.groupPolicy}
+              onChange={(groupPolicy) => setSubscriptionForm((current) => ({ ...current, groupPolicy }))}
+              autoProbe={!configurationUnavailable && missingPrerequisites.length === 0}
+              qualityProfileName={profiles.find((profile) => String(profile.id) === subscriptionForm.qualityProfileId)?.name}
+            />
+
             <div className="grid gap-4 sm:grid-cols-2">
-              <FormSelect
-                label="质量配置"
-                value={subscriptionForm.qualityProfileId}
-                onChange={(qualityProfileId) => setSubscriptionForm((current) => ({ ...current, qualityProfileId }))}
-                options={profiles.map((profile) => ({ value: String(profile.id), label: profile.name }))}
-              />
+              <div className="flex flex-col gap-1">
+                <FormSelect
+                  label="质量配置"
+                  value={subscriptionForm.qualityProfileId}
+                  onChange={(qualityProfileId) => setSubscriptionForm((current) => ({ ...current, qualityProfileId }))}
+                  options={profiles.map((profile) => ({ value: String(profile.id), label: profile.name }))}
+                />
+                <p className="text-xs text-muted">作为资源门槛，并决定同一制作组内、以及列表外兜底时的选择。</p>
+              </div>
               <FormSelect
                 label="下载器"
                 value={subscriptionForm.downloaderId}
@@ -2404,12 +2459,6 @@ export function MediaPage() {
                 options={downloaders.map((downloader) => ({ value: String(downloader.id), label: downloader.name }))}
               />
             </div>
-
-            <SitePicker
-              sites={sites}
-              selected={subscriptionForm.siteIds}
-              onChange={(siteIds) => setSubscriptionForm((current) => ({ ...current, siteIds }))}
-            />
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="subscription-save-path">保存路径</Label>
@@ -2452,9 +2501,9 @@ export function MediaPage() {
         open={editingSubscription !== null}
         onClose={closeSubscriptionEditor}
         title={editingSubscription ? `编辑「${editingSubscription.title}」` : "编辑订阅"}
-        description="订阅目标与下载规则"
+        description="订阅目标、制作组与下载规则"
         escMode="double"
-        panelClassName="max-w-3xl"
+        panelClassName="max-w-6xl"
       >
         {editingSubscription ? (
           <div className="flex flex-col gap-5 p-4 sm:p-6">
@@ -2485,6 +2534,25 @@ export function MediaPage() {
               />
             ) : null}
 
+            <SitePicker
+              sites={sites}
+              selected={editSubscriptionForm.siteIds}
+              onChange={(siteIds) =>
+                setEditSubscriptionForm((current) => ({ ...current, siteIds }))
+              }
+            />
+
+            <ReleaseGroupPicker
+              tmdbId={editingSubscription.tmdb_id}
+              mediaType={editingSubscription.media_type}
+              season={editingSubscription.media_type === "tv" ? editSubscriptionForm.season : null}
+              absoluteNumbering={editSubscriptionForm.numberingMode === "absolute"}
+              siteIds={editSubscriptionForm.siteIds}
+              policy={editSubscriptionForm.groupPolicy}
+              onChange={(groupPolicy) => setEditSubscriptionForm((current) => ({ ...current, groupPolicy }))}
+              qualityProfileName={profiles.find((profile) => String(profile.id) === editSubscriptionForm.qualityProfileId)?.name}
+            />
+
             <div className="grid gap-4 sm:grid-cols-2">
               <FormSelect
                 label="质量配置"
@@ -2506,14 +2574,6 @@ export function MediaPage() {
                 }))}
               />
             </div>
-
-            <SitePicker
-              sites={sites}
-              selected={editSubscriptionForm.siteIds}
-              onChange={(siteIds) =>
-                setEditSubscriptionForm((current) => ({ ...current, siteIds }))
-              }
-            />
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="edit-subscription-save-path">保存路径</Label>
@@ -3454,7 +3514,7 @@ function SubscriptionsPanel({
                     <TableRow>
                       <SortableHead label="影视" sortKey="title" sort={sort} onSort={toggleSort} />
                       <TableHead>当前目标</TableHead>
-                      <TableHead>规则</TableHead>
+                      <TableHead>制作组 / 规则</TableHead>
                       <SortableHead label="状态" sortKey="status" sort={sort} onSort={toggleSort} />
                       <SortableHead label="扫描时间" sortKey="scan" sort={sort} onSort={toggleSort} />
                       <TableHead className="text-right">操作</TableHead>
@@ -3483,9 +3543,9 @@ function SubscriptionsPanel({
                             {subscriptionTargetLabel(subscription)}
                           </TableCell>
                           <TableCell>
-                            <div className="max-w-[220px] text-sm">
-                              <div className="truncate">{profileNames.get(subscription.quality_profile_id) ?? `配置 #${subscription.quality_profile_id}`}</div>
-                              <div className="mt-0.5 truncate text-xs text-muted">{subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、") || "无站点"}</div>
+                            <div className="max-w-[300px] text-sm">
+                              <GroupChain policy={normalizeGroupPolicy(subscription.group_policy)} compact />
+                              <div className="mt-1 truncate text-xs text-muted">{profileNames.get(subscription.quality_profile_id) ?? `配置 #${subscription.quality_profile_id}`} · {subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、") || "无站点"}</div>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -3528,7 +3588,8 @@ function SubscriptionsPanel({
                             </div>
                             <StatusPill label={status.label} tone={status.tone} />
                           </div>
-                          <div className="mt-3 grid gap-1.5 text-xs text-muted sm:grid-cols-2">
+                          <div className="mt-3"><GroupChain policy={normalizeGroupPolicy(subscription.group_policy)} compact /></div>
+                          <div className="mt-2 grid gap-1.5 text-xs text-muted sm:grid-cols-2">
                             <span>{profileNames.get(subscription.quality_profile_id) ?? `配置 #${subscription.quality_profile_id}`}</span>
                             <span>{downloaderNames.get(subscription.downloader_id) ?? `下载器 #${subscription.downloader_id}`}</span>
                             <span className="truncate sm:col-span-2">{subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、")}</span>
@@ -3696,12 +3757,16 @@ function SubscriptionRunDetails({
   error,
   subscriptionId,
   downloads,
+  groupPolicy,
+  upgrades,
 }: {
   snapshot: SubscriptionRunSnapshot | null;
   loading: boolean;
   error: string;
   subscriptionId: number | null;
   downloads: MediaDownload[];
+  groupPolicy: GroupPolicy | null;
+  upgrades: GroupUpgradeRecord[];
 }) {
   if (loading) return <LoadingState label="正在加载运行详情" />;
   if (error) {
@@ -3724,11 +3789,18 @@ function SubscriptionRunDetails({
     : null;
   const selectedOutcome = selectedCandidate
     ? candidateProcessingOutcome(selectedCandidate, selectedDownload, true)
-    : {
-        label: "未选择资源",
-        detail: snapshot.candidates.length > 0 ? "候选均未通过规则，因此没有创建下载任务。" : "搜索没有返回候选资源。",
-        tone: "neutral" as const,
-      };
+    : snapshot.group_wait_until
+      ? {
+          label: "等待首选制作组",
+          detail: `${snapshot.group_note ?? "首选组尚未发布"}，${formatDate(snapshot.group_wait_until)} 后会重新扫描。`,
+          tone: "neutral" as const,
+        }
+      : {
+          label: "未选择资源",
+          detail: snapshot.group_note
+            ?? (snapshot.candidates.length > 0 ? "候选均未通过规则，因此没有创建下载任务。" : "搜索没有返回候选资源。"),
+          tone: "neutral" as const,
+        };
   const targetLabel = targetKeyLabel(snapshot.target_key);
   const selectedQuality = releaseQualityFields(selectedDownload?.parsed_release ?? selectedCandidate?.release)
     .filter((field) => field !== targetLabel);
@@ -3740,6 +3812,20 @@ function SubscriptionRunDetails({
           本次运行失败：{snapshot.error}
         </div>
       ) : null}
+
+      {groupPolicy && (groupPolicy.groups.length > 0 || snapshot.group_note) ? (
+        <section aria-label="制作组" className={cn("flex flex-col gap-2 rounded-xl border px-4 py-3 text-sm", snapshot.group_wait_until ? "border-[#efd9b4] bg-[#fdf6ea] text-[#7a4a08]" : "border-border")}>
+          <GroupChain policy={groupPolicy} />
+          {snapshot.group_note ? (
+            <p>
+              {snapshot.group_note}
+              {snapshot.group_wait_until ? `（${formatRelative(snapshot.group_wait_until)}，${formatDate(snapshot.group_wait_until)}）` : ""}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      <GroupUpgradeList upgrades={upgrades} />
 
       <section
         aria-labelledby="run-outcome-heading"
@@ -3841,6 +3927,7 @@ function SubscriptionRunDetails({
                            <div className="line-clamp-2 text-sm font-semibold" title={candidate.result.title}>{candidate.result.title}</div>
                            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                              {selected ? <StatusPill label="最终选择" tone="positive" /> : null}
+                             <CandidateGroupBadge candidate={candidate} />
                              <span className="text-xs text-muted">{candidate.result.source_site}</span>
                              <span className="text-xs text-muted">{formatBytes(candidate.result.size)}</span>
                              <span className="text-xs text-muted">{candidate.result.seeders} 做种</span>
@@ -3871,6 +3958,7 @@ function SubscriptionRunDetails({
                    </div>
                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
                      {selected ? <StatusPill label="最终选择" tone="positive" /> : null}
+                     <CandidateGroupBadge candidate={candidate} />
                      <span>{candidate.result.source_site}</span>
                     <span>{formatBytes(candidate.result.size)}</span>
                     <span>{candidate.result.seeders} 做种</span>
@@ -3936,6 +4024,20 @@ type CandidateProcessingOutcome = {
   tone: "positive" | "negative" | "neutral";
 };
 
+function CandidateGroupBadge({ candidate }: { candidate: ResourceCandidate }) {
+  const group = candidate.release?.release_group;
+  if (candidate.groupFiltered) {
+    return <span className="rounded-md border border-destructive/25 bg-destructive/5 px-1.5 py-0.5 text-xs text-destructive" title={candidate.groupFiltered}>{candidate.groupFiltered}</span>;
+  }
+  if (!group && candidate.groupRank == null) return null;
+  const label = candidate.groupRank === 0 ? "首选" : candidate.groupRank != null ? `备选 ${candidate.groupRank}` : "列表外";
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs", candidate.groupRank === 0 ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground")}>
+      <span className="font-sans">{label}</span>{group ?? "未识别"}
+    </span>
+  );
+}
+
 function candidateProcessingOutcome(
   candidate: ResourceCandidate,
   download: MediaDownload | null,
@@ -3972,8 +4074,14 @@ function candidateProcessingOutcome(
   if (candidate.parseError) {
     return { label: "未下载", detail: `标题解析失败：${candidate.parseError}`, tone: "negative" };
   }
+  if (candidate.decision?.accepted && candidate.groupFiltered) {
+    return { label: "未下载", detail: candidate.groupFiltered, tone: "negative" };
+  }
+  if (candidate.decision?.accepted && candidate.groupRank != null && candidate.groupRank > 0) {
+    return { label: "符合但未选", detail: `属于备选 ${candidate.groupRank}；首选组缺席且等待结束后才会使用，或已有更靠前的制作组版本。`, tone: "neutral" };
+  }
   if (candidate.decision?.accepted) {
-    return { label: "符合但未选", detail: "通过全部规则，但在分辨率、片源、体积充足度、视频特性、编码或做种数的逐级排序中低于最终选择。", tone: "neutral" };
+    return { label: "符合但未选", detail: "通过全部规则，但在制作组顺序，或分辨率、片源、体积充足度、视频特性、编码、做种数的逐级排序中低于最终选择。", tone: "neutral" };
   }
   if (candidate.decision) {
     return {

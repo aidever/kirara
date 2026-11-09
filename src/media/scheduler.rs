@@ -14,6 +14,8 @@ use super::service::MediaService;
 
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const STARTUP_RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const GROUP_UPGRADE_INTERVAL: Duration = Duration::from_secs(60);
+const GROUP_UPGRADE_BATCH: usize = 3;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MediaSchedulerConfig {
@@ -108,6 +110,7 @@ impl MediaScheduler {
             self.subscription_loop(self.control.subscribe()),
             self.download_loop(self.control.subscribe()),
             self.recovery_loop(self.control.subscribe()),
+            self.upgrade_loop(self.control.subscribe()),
         );
         info!("media scheduler stopped");
     }
@@ -207,6 +210,20 @@ impl MediaScheduler {
             self.run_download_batch().await;
             if !wait_for_tick(&mut control, self.config.download_poll_interval).await {
                 return;
+            }
+        }
+    }
+
+    /// 制作组洗版巡检：每分钟处理少量到期记录，避免集中搜索。
+    async fn upgrade_loop(&self, mut control: watch::Receiver<SchedulerControl>) {
+        loop {
+            if !wait_for_tick(&mut control, GROUP_UPGRADE_INTERVAL).await {
+                return;
+            }
+            match self.service.process_group_upgrades(GROUP_UPGRADE_BATCH).await {
+                Ok(0) => {}
+                Ok(processed) => debug!(processed, "media scheduler checked group upgrades"),
+                Err(error) => error!(%error, "media scheduler group upgrade check failed"),
             }
         }
     }

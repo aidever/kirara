@@ -40,9 +40,11 @@ use crate::media::models::{
 use crate::media::scheduler::MediaScheduler;
 use crate::media::service::{
     CreateSubscriptionRequest, FailedDownloadReconciliation, MediaService, MediaServiceError,
-    QueueDownloadRequest, ResourceSearchRequest, ResourceSearchResponse, SubscriptionRunResult,
+    QueueDownloadRequest, ReleaseGroupProbeRequest, ReleaseGroupProbeResponse,
+    ResourceSearchRequest, ResourceSearchResponse, SubscriptionRunResult,
     SubscriptionRunSnapshot,
 };
+use crate::media::models::MediaGroupUpgradeRecord;
 use crate::media::tmdb::{TmdbDetails, TmdbError, TmdbMedia, TmdbMediaType, TmdbSeason};
 use crate::monitor::{SystemMonitor, SystemSnapshot, SystemSnapshotRecord};
 use crate::net::client_factory;
@@ -473,6 +475,11 @@ fn media_router(
             get(list_subscription_downloads),
         )
         .route("/resources/search", post(search_media_resources))
+        .route("/release-groups/probe", post(probe_release_groups))
+        .route(
+            "/subscriptions/{id}/group-upgrades",
+            get(list_subscription_group_upgrades),
+        )
         .route(
             "/downloads",
             get(list_media_downloads).post(queue_media_download),
@@ -1789,6 +1796,14 @@ async fn update_media_subscription(
         .await
         .map_err(media_app_error)?
         .ok_or_else(|| ApiError::conflict("subscription changed or is currently being scanned"))?;
+    if !updated.group_policy.is_active() || !updated.group_policy.upgrade {
+        state
+            .service
+            .database()
+            .cancel_watching_media_group_upgrades(id)
+            .await
+            .map_err(media_app_error)?;
+    }
     if updated.enabled {
         state.scheduler.wake();
     }
@@ -1909,6 +1924,42 @@ async fn search_media_resources(
         state
             .service
             .search_resources(&payload)
+            .await
+            .map_err(ApiError::from)?,
+    ))
+}
+
+async fn probe_release_groups(
+    State(state): State<MediaApiState>,
+    Json(mut payload): Json<ReleaseGroupProbeRequest>,
+) -> Result<Json<ReleaseGroupProbeResponse>, ApiError> {
+    validate_positive_id(payload.tmdb_id, "tmdb_id")?;
+    payload.media_type = payload.media_type.trim().to_ascii_lowercase();
+    if !matches!(payload.media_type.as_str(), "tv" | "movie") {
+        return Err(ApiError::bad_request("media_type must be tv or movie"));
+    }
+    validate_site_ids(&payload.site_ids)?;
+    if payload.site_ids.is_empty() {
+        return Err(ApiError::bad_request("site_ids must not be empty"));
+    }
+    Ok(Json(
+        state
+            .service
+            .probe_release_groups(&payload)
+            .await
+            .map_err(ApiError::from)?,
+    ))
+}
+
+async fn list_subscription_group_upgrades(
+    State(state): State<MediaApiState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<MediaGroupUpgradeRecord>>, ApiError> {
+    load_media_subscription(&state, id).await?;
+    Ok(Json(
+        state
+            .service
+            .list_group_upgrades(id)
             .await
             .map_err(ApiError::from)?,
     ))
@@ -2276,6 +2327,9 @@ fn normalize_and_validate_new_subscription(
     }
     validate_site_ids(&payload.site_ids)?;
     normalize_save_path(&mut payload.save_path)?;
+    payload.group_policy = std::mem::take(&mut payload.group_policy)
+        .normalized()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     if payload.start_episode == Some(0) || payload.absolute_episode == Some(0) {
         return Err(ApiError::bad_request(
             "episode numbers must be greater than zero",
@@ -2306,6 +2360,13 @@ fn normalize_and_validate_subscription_update(
     validate_positive_id(payload.downloader_id, "downloader_id")?;
     validate_site_ids(&payload.site_ids)?;
     normalize_save_path(&mut payload.save_path)?;
+    if let Some(policy) = payload.group_policy.take() {
+        payload.group_policy = Some(
+            policy
+                .normalized()
+                .map_err(|error| ApiError::bad_request(error.to_string()))?,
+        );
+    }
     if payload.next_episode == Some(0) || payload.absolute_episode == Some(0) {
         return Err(ApiError::bad_request(
             "episode numbers must be greater than zero",
@@ -6022,6 +6083,7 @@ mod media_api_tests {
 
     fn subscription_with_status(status: Option<&str>) -> SubscriptionRecord {
         SubscriptionRecord {
+            group_policy: Default::default(),
             id: 1,
             tmdb_id: 42,
             media_type: "tv".to_string(),

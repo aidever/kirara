@@ -243,6 +243,20 @@ impl IdentityGate {
     }
 }
 
+impl IdentityGate {
+    /// 是否属于目标剧集的同一季（不检查具体集数），用于按制作组归并探测结果。
+    pub fn matches_series(target: &MediaTarget, release: &ReleaseInfo) -> bool {
+        Self::check(target, release).iter().all(|rejection| {
+            matches!(
+                rejection.code,
+                RejectCode::WrongEpisode
+                    | RejectCode::SeasonPackNotAllowed
+                    | RejectCode::AmbiguousNumbering
+            )
+        })
+    }
+}
+
 pub struct DecisionEngine;
 
 impl DecisionEngine {

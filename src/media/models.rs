@@ -1,3 +1,4 @@
+use super::domain::group::GroupPolicy;
 use super::tmdb::TmdbGenre;
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +88,8 @@ pub struct SubscriptionRecord {
     pub start_episode: Option<u32>,
     pub absolute_episode: Option<u32>,
     pub quality_profile_id: i64,
+    #[serde(default)]
+    pub group_policy: GroupPolicy,
     pub downloader_id: i64,
     pub site_ids: Vec<i64>,
     pub save_path: Option<String>,
@@ -118,6 +121,8 @@ pub struct NewSubscription {
     pub start_episode: Option<u32>,
     pub absolute_episode: Option<u32>,
     pub quality_profile_id: i64,
+    #[serde(default)]
+    pub group_policy: GroupPolicy,
     pub downloader_id: i64,
     #[serde(default)]
     pub site_ids: Vec<i64>,
@@ -132,6 +137,9 @@ pub struct UpdateSubscription {
     pub next_episode: Option<u32>,
     pub absolute_episode: Option<u32>,
     pub quality_profile_id: i64,
+    /// 缺省时保留原有制作组策略。
+    #[serde(default)]
+    pub group_policy: Option<GroupPolicy>,
     pub downloader_id: i64,
     #[serde(default)]
     pub site_ids: Vec<i64>,
@@ -151,6 +159,30 @@ pub struct SubscriptionTargetRecord {
     pub absolute_episode: Option<u32>,
     pub air_date: Option<String>,
     pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 用备选或列表外版本下载后，等待更靠前制作组发布再洗版的记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaGroupUpgradeRecord {
+    pub id: i64,
+    pub subscription_id: i64,
+    pub target_key: String,
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
+    pub absolute_episode: Option<u32>,
+    pub download_id: i64,
+    pub current_group: Option<String>,
+    pub current_rank: u32,
+    /// watching：等待更好的版本；upgrading：新版本下载中；done / expired / cancelled 为终态。
+    pub status: String,
+    pub upgrade_download_id: Option<i64>,
+    pub upgrade_group: Option<String>,
+    pub upgrade_rank: Option<u32>,
+    pub replaced_count: u32,
+    pub last_checked_at: Option<String>,
+    pub last_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
