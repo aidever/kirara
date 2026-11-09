@@ -1185,7 +1185,7 @@ export function SignInPage() {
             </div>
             {!usingPreset && imageCaptcha ? <>
               <p id="sign-in-image-guidance" className="text-xs leading-relaxed text-muted sm:col-span-2">
-                以下几项需要了解站点页面结构。普通用户可通过 <a href="https://github.com/imythu/kirara/issues/new" target="_blank" rel="noreferrer" className="text-primary underline underline-offset-4">GitHub 联系作者适配站点</a>。
+                以下几项需要了解站点页面结构。普通用户可通过 <a href="https://github.com/aidever/kirara/issues/new" target="_blank" rel="noreferrer" className="text-primary underline underline-offset-4">GitHub 联系作者适配站点</a>。
               </p>
               {([
                 ["captcha_selector", "验证码图片 Selector", "验证码图片的 CSS Selector"],

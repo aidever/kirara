@@ -1,14 +1,14 @@
 # 从 rflush 迁移到云母 Kirara
 
-后续开发、问题反馈和发布均移至 [imythu/kirara](https://github.com/imythu/kirara)。[旧仓库](https://github.com/imythu/rflush) 停止维护，保留历史代码和发布记录。本仓库保留迁移前的 Git 提交历史。
+后续开发、问题反馈和发布均移至 [aidever/kirara](https://github.com/aidever/kirara)。[旧仓库](https://github.com/imythu/rflush) 停止维护，保留历史代码和发布记录。本仓库保留迁移前的 Git 提交历史。
 
 ## 名称变化
 
 | 项目 | 原名称 | 新名称 |
 | --- | --- | --- |
-| 仓库 | `imythu/rflush` | `imythu/kirara` |
+| 仓库 | `imythu/rflush` | `aidever/kirara` |
 | 程序 | `rflush` / `rflush.exe` | `kirara` / `kirara.exe` |
-| 容器镜像 | `ghcr.io/imythu/rflush` | `ghcr.io/imythu/kirara` |
+| 容器镜像 | `ghcr.io/imythu/rflush` | `ghcr.io/aidever/kirara` |
 | 环境变量 | `RFLUSH_HOST`、`RFLUSH_PORT`、`RFLUSH_DATA_DIR` | `KIRARA_HOST`、`KIRARA_PORT`、`KIRARA_DATA_DIR` |
 | 新安装数据库 | `rflush.db` | `kirara.db` |
 | Rust 日志模块筛选 | `rflush=debug` | `kirara=debug` |
@@ -37,7 +37,7 @@ Kirara 优先打开 `kirara.db`；不存在该文件但存在 `rflush.db` 时，
 docker run --name kirara \
   -p 127.0.0.1:3000:3000 \
   -v "$(pwd)/data:/data" \
-  ghcr.io/imythu/kirara:latest-beta
+  ghcr.io/aidever/kirara:latest-beta
 ```
 
 `latest-beta` 为自动构建预发布（Linux amd64）；正式版使用 `latest`（Linux amd64 / arm64），也可使用具体版本标签。不要把旧仓库的版本号直接当作新镜像中已存在的标签。
@@ -46,7 +46,7 @@ docker run --name kirara \
 
 ```bash
 git remote rename origin legacy
-git remote add origin https://github.com/imythu/kirara.git
+git remote add origin https://github.com/aidever/kirara.git
 git fetch origin
 git branch --set-upstream-to=origin/master master
 ```

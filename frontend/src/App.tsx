@@ -541,7 +541,7 @@ export default function App() {
               <BookOpen className="h-4 w-4" aria-hidden="true" />
             </a>
             <a
-              href="https://github.com/imythu/kirara"
+              href="https://github.com/aidever/kirara"
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-lg p-2 text-muted transition hover:bg-accent hover:text-foreground"

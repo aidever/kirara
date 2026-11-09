@@ -1,7 +1,7 @@
 # 云母
 
-[![GitHub Release](https://img.shields.io/github/v/release/imythu/kirara?style=flat-square)](https://github.com/imythu/kirara/releases)
-[![Docker Image](https://img.shields.io/github/v/release/imythu/kirara?style=flat-square&label=ghcr.io)](https://github.com/imythu/kirara/pkgs/container/kirara)
+[![GitHub Release](https://img.shields.io/github/v/release/aidever/kirara?style=flat-square)](https://github.com/aidever/kirara/releases)
+[![Docker Image](https://img.shields.io/github/v/release/aidever/kirara?style=flat-square&label=ghcr.io)](https://github.com/aidever/kirara/pkgs/container/kirara)
 
 云母是一套面向 PT 用户的管理工具，提供自动追剧、电影订阅、多站资源搜索、qBittorrent 下载、刷流任务和站点数据总览。Windows 和 macOS 提供桌面应用，Linux 和 Docker 提供 Web 服务。
 
@@ -34,7 +34,7 @@
 
 ### Windows / macOS 桌面应用
 
-从 [GitHub Releases](https://github.com/imythu/kirara/releases) 下载对应系统的安装包，并核对同一版本的 `SHA256SUMS.txt`：
+从 [GitHub Releases](https://github.com/aidever/kirara/releases) 下载对应系统的安装包，并核对同一版本的 `SHA256SUMS.txt`：
 
 | 系统 | 安装包 | 使用方式 |
 | --- | --- | --- |
@@ -51,7 +51,7 @@
 
 ### Linux 直接运行
 
-从 [GitHub Releases](https://github.com/imythu/kirara/releases) 下载对应架构的 `.tar.gz` 压缩包，解压后运行：
+从 [GitHub Releases](https://github.com/aidever/kirara/releases) 下载对应架构的 `.tar.gz` 压缩包，解压后运行：
 
 ```bash
 ./kirara
@@ -87,7 +87,7 @@ http://127.0.0.1:3000
 docker run --name kirara \
   -p 127.0.0.1:3000:3000 \
   -v $(pwd)/data:/data \
-  ghcr.io/imythu/kirara:2.4.4
+  ghcr.io/aidever/kirara:2.4.4
 ```
 
 自动构建提供 `latest-beta`（Linux amd64）；正式版提供 `latest`（Linux amd64 / arm64）。
@@ -98,7 +98,7 @@ docker run --name kirara \
 docker run --name kirara \
   -p 127.0.0.1:3000:3000 \
   -v $(pwd)/data:/data \
-  ghcr.io/imythu/kirara:<version>
+  ghcr.io/aidever/kirara:<version>
 ```
 
 容器默认使用：
