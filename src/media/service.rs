@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
-use chrono::{Duration, Utc};
+use chrono::{Datelike, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{Instrument, info, warn};
 
@@ -740,15 +740,20 @@ impl MediaService {
         // 各榜单、各平台大量重名，按（片名, 类型）去重后统一匹配豆瓣 / TMDB。
         let matches = self.resolve_maoyan_titles(&parsed, &settings).await;
 
-        let mut succeeded = 0usize;
-        for (chart, platform, date, mut items) in parsed {
-            for item in &mut items {
+        let mut parsed = parsed;
+        for (chart, _, _, items) in &mut parsed {
+            for item in items.iter_mut() {
                 if let Some(found) = matches.get(&(item.title.clone(), chart.media_type().as_str()))
                 {
                     item.douban = found.douban.clone();
                     item.tmdb = found.tmdb.clone();
                 }
             }
+        }
+        self.enrich_maoyan_items(&http, &mut parsed).await;
+
+        let mut succeeded = 0usize;
+        for (chart, platform, date, items) in parsed {
             let response = MaoyanRankResponse {
                 chart,
                 platform,
@@ -1054,8 +1059,7 @@ impl MediaService {
     ) -> bool {
         let profile = profile_to_domain(profile);
         results.iter().any(|result| {
-            self.parser
-                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+            self.parse_result(&result)
                 .is_ok_and(|release| {
                     DecisionEngine::evaluate(target, &release, &profile, result.seeders).accepted
                 })
@@ -1073,9 +1077,7 @@ impl MediaService {
         let domain_profile = profile.map(profile_to_domain);
         let mut candidates = Vec::with_capacity(results.len().min(RESOURCE_SEARCH_RESULT_LIMIT));
         for result in results {
-            match self
-                .parser
-                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+            match self.parse_result(&result)
             {
                 Ok(release) => {
                     let decision = request.target.as_ref().zip(domain_profile.as_ref()).map(
@@ -1973,9 +1975,7 @@ impl MediaService {
                         subscription.quality_profile_id
                     ))
                 })?;
-            let release = self
-                .parser
-                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+            let release = self.parse_result(&result)
                 .map_err(|error| {
                     MediaServiceError::Invalid(format!(
                         "release title could not be matched to the subscription: {error}"
@@ -2021,9 +2021,7 @@ impl MediaService {
                             request.quality_profile_id
                         ))
                     })?;
-                let release = self
-                    .parser
-                    .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+                let release = self.parse_result(&result)
                     .map_err(|error| {
                         MediaServiceError::Invalid(format!(
                             "release title could not be matched to the search target: {error}"
@@ -2783,6 +2781,18 @@ impl MediaService {
         Ok((adapters, errors, priorities))
     }
 
+    /// 解析搜索结果：标题为主，副标题补充集数与年份，并记下发布年份。
+    fn parse_result(
+        &self,
+        result: &SearchResult,
+    ) -> Result<crate::media::domain::release::ReleaseInfo, crate::media::domain::release::ReleaseParseError> {
+        let mut release = self
+            .parser
+            .parse_with_subtitle(&result.title, result.subtitle.as_deref())?;
+        release.published_year = result.publish_time.map(|time| time.year() as u32);
+        Ok(release)
+    }
+
     /// 探测某部剧在所选站点上有哪些制作组的资源，供创建订阅时挑选。
     pub async fn probe_release_groups(
         &self,
@@ -2814,7 +2824,7 @@ impl MediaService {
             MediaTarget::Anime {
                 tmdb_id: request.tmdb_id,
                 titles: titles.clone(),
-                year: None,
+                year: details.media.year,
                 absolute_episode: 0,
                 season_episode: request
                     .season
@@ -2824,7 +2834,7 @@ impl MediaService {
             MediaTarget::Episode {
                 tmdb_id: request.tmdb_id,
                 titles: titles.clone(),
-                year: None,
+                year: details.media.year,
                 season: request.season.unwrap_or(1),
                 episode: 0,
                 allow_season_pack: true,
@@ -2864,9 +2874,7 @@ impl MediaService {
             if !seen.insert((result.site_id, result.torrent_id.clone())) {
                 continue;
             }
-            let Ok(release) = self
-                .parser
-                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+            let Ok(release) = self.parse_result(&result)
             else {
                 continue;
             };

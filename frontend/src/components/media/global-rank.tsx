@@ -3,7 +3,13 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  CalendarDays,
+  ChartPie,
+  Check,
+  Clock,
   ExternalLink,
+  Eye,
+  Flame,
   History,
   ImageOff,
   LoaderCircle,
@@ -14,6 +20,10 @@ import {
   Search,
   Settings2,
   Star,
+  Ticket,
+  Tv,
+  Users,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -40,7 +50,7 @@ const SOURCE_COPY: Record<RankSourceKey, { short: string; firstLoad: string; not
   maoyan: {
     short: "猫眼",
     firstLoad: "首次获取猫眼榜单，匹配豆瓣与 TMDB 需要一点时间",
-    note: "实时票房、年度与影史票房、网络电影与剧集综艺热度。条目已匹配豆瓣评分和 TMDB，可直接订阅。",
+    note: "实时票房、年度与影史票房、网络电影与剧集综艺热度（各榜前 30 名）。条目带豆瓣 / TMDB 评分、主演和播放量，点击卡片查看详情，可直接订阅。",
   },
   netflix: {
     short: "Netflix",
@@ -233,29 +243,6 @@ function NewBadge() {
   return <span className="ml-1.5 inline-flex rounded bg-primary/10 px-1 align-middle text-[11px] font-semibold text-primary">新上榜</span>;
 }
 
-/** 豆瓣评分：有分显示分数，查过没分显示「未开分 / 未收录」，还没查过不显示。 */
-function DoubanRating({ item }: { item: RankItem }) {
-  const douban = item.douban;
-  if (douban?.rating) {
-    return (
-      <a
-        href={douban.url}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-amber-800 underline-offset-4 hover:underline"
-        title="在豆瓣查看"
-      >
-        <Star className="size-3 fill-amber-500 text-amber-500" aria-hidden="true" />豆瓣 {douban.rating.toFixed(1)}
-      </a>
-    );
-  }
-  if (douban) {
-    return <a href={douban.url} target="_blank" rel="noreferrer" className="text-xs text-muted underline-offset-4 hover:underline">豆瓣未开分</a>;
-  }
-  if (item.douban_checked_at) return <span className="text-xs text-muted">豆瓣未收录</span>;
-  return null;
-}
-
 type Stat = [label: string, value: string | null | undefined];
 
 function Stats({ stats }: { stats: Stat[] }) {
@@ -315,75 +302,161 @@ type MediaActions = {
   onSubscribe: (media: RankTmdbMedia) => void;
   onSearchTitle: (title: string, type: "tv" | "movie") => void;
   onOpenDetail: (target: RankDetailTarget) => void;
+  /** 已订阅的条目，键为 `${media_type}:${tmdb_id}` */
+  subscribed?: ReadonlySet<string>;
 };
 
-function maoyanStats(board: RankBoard, item: RankItem): Stat[] {
+type InfoRow = { icon: LucideIcon; label: string; value: string | null | undefined; muted?: boolean };
+
+function joined(...values: (string | null | undefined)[]) {
+  return values.filter(Boolean).join(" · ") || null;
+}
+
+/** 猫眼各榜单的展示行：平台、上线时间、票房或热度、播放量、主演。 */
+function maoyanRows(board: RankBoard, item: RankItem): InfoRow[] {
+  const cast: InfoRow = { icon: Users, label: "主演", value: item.cast?.join(" / ") };
   switch (board.board_type) {
     case "movie":
-      return [["当日票房", item.box_office], ["累计", item.total_box_office], ["票房占比", item.box_rate], ["排片占比", item.show_rate]];
+      return [
+        { icon: Clock, label: "上映", value: item.release_info },
+        { icon: Ticket, label: "票房", value: joined(item.box_office ? `当日 ${item.box_office}` : null, item.total_box_office ? `累计 ${item.total_box_office}` : null) },
+        { icon: ChartPie, label: "占比", value: joined(item.box_rate ? `票房 ${item.box_rate}` : null, item.show_rate ? `排片 ${item.show_rate}` : null) },
+        cast,
+      ];
     case "web_movie":
-      return [["当月分账", item.box_office], ["热度", item.heat]];
+      return [
+        { icon: Tv, label: "平台", value: item.platform },
+        { icon: Clock, label: "上线", value: item.release_info },
+        { icon: Ticket, label: "分账", value: item.box_office ? `当月 ${item.box_office}` : null },
+        { icon: Flame, label: "热度", value: item.heat },
+        cast,
+      ];
     case "total":
     case "year":
-      return [["总票房", item.total_box_office]];
+      return [
+        { icon: Ticket, label: "总票房", value: item.total_box_office },
+        cast,
+      ];
     case "global":
-      return [["全球票房", item.total_box_office], ["北美", item.box_office]];
+      return [
+        { icon: Ticket, label: "票房", value: joined(item.total_box_office ? `全球 ${item.total_box_office}` : null, item.box_office ? `北美 ${item.box_office}` : null) },
+        cast,
+      ];
     default:
-      return [["热度", item.heat]];
+      return [
+        { icon: Tv, label: "平台", value: item.platform },
+        { icon: Clock, label: "上线", value: item.release_info },
+        { icon: Flame, label: "热度", value: item.heat },
+        { icon: Play, label: "播放量", value: item.play_count ?? "未公开", muted: !item.play_count },
+        cast,
+      ];
   }
 }
 
-function netflixStats(item: RankItem): Stat[] {
+function netflixRows(item: RankItem): InfoRow[] {
+  const original = item.original_title && item.original_title !== item.title ? item.original_title : null;
   return [
-    ["观看", item.views ? `${formatLarge(item.views)}次` : null],
-    ["时长", item.hours_viewed ? `${formatLarge(item.hours_viewed)}小时` : null],
-    ["片长", item.runtime_minutes ? formatRuntime(item.runtime_minutes) : null],
-    ["在榜", item.weeks_in_top10 ? `${item.weeks_in_top10} 周` : null],
+    { icon: Tv, label: "原名", value: joined(original, item.season_title && item.season_title !== item.original_title ? item.season_title : null) },
+    { icon: Eye, label: "观看", value: joined(item.views ? `${formatLarge(item.views)}次` : null, item.hours_viewed ? `${formatLarge(item.hours_viewed)}小时` : null) },
+    { icon: Clock, label: "片长", value: item.runtime_minutes ? formatRuntime(item.runtime_minutes) : null },
+    { icon: CalendarDays, label: "在榜", value: item.weeks_in_top10 ? `${item.weeks_in_top10} 周` : null },
+    { icon: Users, label: "主演", value: item.cast?.join(" / ") },
   ];
+}
+
+function InfoRows({ rows }: { rows: InfoRow[] }) {
+  const shown = rows.filter((row) => row.value);
+  if (shown.length === 0) return null;
+  return (
+    <dl className="flex flex-col gap-1 text-xs">
+      {shown.map(({ icon: Icon, label, value, muted }) => (
+        <div key={label} className="flex min-w-0 items-center gap-1.5">
+          <dt className="shrink-0 text-muted"><Icon className="size-3.5" aria-hidden="true" /><span className="sr-only">{label}</span></dt>
+          <dd className={cn("min-w-0 truncate tabular-nums", muted ? "text-muted" : "text-foreground")} title={value ?? undefined}>
+            {label === "热度" ? <span className="text-muted">热度 </span> : null}
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** 评分：豆瓣优先，同时显示 TMDB；都没有时说明豆瓣的查询状态。 */
+function Ratings({ item }: { item: RankItem }) {
+  const douban = item.douban;
+  const tmdb = item.tmdb_rating;
+  const chips: React.ReactNode[] = [];
+  if (douban?.rating) {
+    chips.push(
+      <a key="douban" href={douban.url} target="_blank" rel="noreferrer" title="在豆瓣查看"
+        className="relative z-10 inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-amber-800 underline-offset-4 hover:underline dark:bg-amber-500/15 dark:text-amber-300">
+        <Star className="size-3 fill-amber-500 text-amber-500" aria-hidden="true" />豆瓣 {douban.rating.toFixed(1)}
+      </a>,
+    );
+  }
+  if (tmdb) {
+    chips.push(
+      <span key="tmdb" className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-sky-800 dark:bg-sky-500/15 dark:text-sky-300">
+        TMDB {tmdb.toFixed(1)}
+      </span>,
+    );
+  }
+  if (!douban?.rating) {
+    if (douban) chips.push(<a key="pending" href={douban.url} target="_blank" rel="noreferrer" className="relative z-10 text-xs text-muted underline-offset-4 hover:underline">豆瓣未开分</a>);
+    else if (item.douban_checked_at && chips.length === 0) chips.push(<span key="missing" className="text-xs text-muted">暂无评分</span>);
+  }
+  if (chips.length === 0) return null;
+  return <div className="flex flex-wrap items-center gap-1.5">{chips}</div>;
 }
 
 function MediaCard({ board, item, actions }: { board: RankBoard; item: RankItem; actions: MediaActions }) {
   const type = item.media_type ?? (board.kind === "movie" ? "movie" : "tv");
   const isNetflix = board.source === "netflix";
-  const original = item.original_title && item.original_title !== item.title ? item.original_title : null;
-  const secondary = isNetflix
-    ? [original, item.season_title && item.season_title !== item.original_title ? item.season_title : null].filter(Boolean).join(" · ")
-    : [item.platform, item.release_info].filter(Boolean).join(" · ");
-  const stats = isNetflix ? netflixStats(item) : maoyanStats(board, item);
+  const rows = isNetflix ? netflixRows(item) : maoyanRows(board, item);
+  const subscribed = item.tmdb ? actions.subscribed?.has(`${item.tmdb.media_type}:${item.tmdb.tmdb_id}`) ?? false : false;
   const openDetail = () =>
     actions.onOpenDetail({
       title: item.title,
-      description: [secondary, ...stats.filter((stat) => stat[1]).map(([label, value]) => `${label} ${value}`)].filter(Boolean).join(" · "),
+      description: rows.filter((row) => row.value && !row.muted && row.label !== "主演").map((row) => `${row.label} ${row.value}`).join(" · "),
       mediaType: type,
       douban: item.douban ?? null,
       tmdb: item.tmdb ?? null,
+      cast: item.cast ?? [],
+      tmdbRating: item.tmdb_rating ?? null,
     });
 
   return (
-    <li className="flex gap-3 rounded-xl border border-border bg-card p-3">
-      <button type="button" aria-label={`查看「${item.title}」详情`} className="relative w-[72px] shrink-0 cursor-pointer self-start rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={openDetail}>
-        <RankCover item={item} />
-        <RankBadge rank={item.rank} />
-      </button>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <h5 className="line-clamp-2 text-sm font-semibold">
-          <button type="button" className="cursor-pointer text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={openDetail}>{item.title}</button>
-          {item.year ? <span className="ml-1 font-normal text-muted">({item.year})</span> : null}
+    <li className="group relative flex gap-3 rounded-xl border border-border bg-card p-2.5 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/40">
+      {/* 整张卡片都可以打开详情；卡片里的按钮和链接位于其上层。 */}
+      <button type="button" aria-label={`查看「${item.title}」详情`} className="absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={openDetail} />
+      <div className="pointer-events-none relative w-[92px] shrink-0 self-start">
+        <RankCover item={item} className="rounded-b-none" />
+        <div className={cn(
+          "rounded-b-lg px-1 py-0.5 text-center text-[11px] font-semibold",
+          subscribed ? "bg-emerald-600 text-white" : item.tmdb ? "bg-surface-container text-muted" : "bg-surface-container text-muted/80",
+        )}>
+          {subscribed ? "已订阅" : item.tmdb ? "未订阅" : "未匹配 TMDB"}
+        </div>
+      </div>
+      <div className="pointer-events-none flex min-w-0 flex-1 flex-col gap-1.5">
+        <h5 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+          <span className={cn("shrink-0 rounded-md px-1.5 text-xs tabular-nums", item.rank <= 3 ? "bg-primary text-primary-foreground" : "bg-surface-container text-muted")}>{item.rank}</span>
+          <span className="truncate" title={item.title}>{item.title}</span>
+          {item.year ? <span className="shrink-0 font-normal text-muted">({item.year})</span> : null}
           {item.new_entry ? <NewBadge /> : null}
         </h5>
-        {secondary ? <p className="truncate text-xs text-muted" title={secondary}>{secondary}</p> : null}
-        {item.douban || item.douban_checked_at ? <div className="flex flex-wrap items-center gap-2"><DoubanRating item={item} /></div> : null}
-        <Stats stats={stats} />
-        <div className="mt-auto flex items-end justify-between gap-2 pt-1.5">
-          <span className="min-w-0 truncate text-xs text-muted" title={item.tmdb ? `TMDB：${item.tmdb.title}` : undefined}>
-            {item.tmdb ? `TMDB：${item.tmdb.title}${item.tmdb.year ? ` (${item.tmdb.year})` : ""}` : "未匹配到 TMDB"}
-          </span>
-          {item.tmdb ? (
-            <Button className="h-8 shrink-0 px-3" onClick={() => actions.onSubscribe(item.tmdb as RankTmdbMedia)}>
+        <Ratings item={item} />
+        <InfoRows rows={rows} />
+        <div className="pointer-events-auto relative z-10 mt-auto flex justify-end pt-1">
+          {subscribed ? (
+            <span className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-xs font-medium text-emerald-700 dark:text-emerald-400"><Check className="size-3.5" aria-hidden="true" />已订阅</span>
+          ) : item.tmdb ? (
+            <Button className="h-7 px-2.5 text-xs" onClick={() => actions.onSubscribe(item.tmdb as RankTmdbMedia)}>
               <Plus data-icon="inline-start" />订阅
             </Button>
           ) : (
-            <Button variant="outline" className="h-8 shrink-0 px-3" onClick={() => actions.onSearchTitle(item.original_title ?? item.title, type)}>
+            <Button variant="outline" className="h-7 px-2.5 text-xs" onClick={() => actions.onSearchTitle(item.original_title ?? item.title, type)}>
               <Search data-icon="inline-start" />搜索
             </Button>
           )}
@@ -395,7 +468,7 @@ function MediaCard({ board, item, actions }: { board: RankBoard; item: RankItem;
 
 function MediaGrid({ board, actions }: { board: RankBoard; actions: MediaActions }) {
   return (
-    <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {board.items.map((item) => (
         <MediaCard key={`${board.key}:${item.rank}:${item.original_title ?? item.title}`} board={board} item={item} actions={actions} />
       ))}
@@ -707,6 +780,7 @@ export function GlobalRankBoard({
   onSubscribe,
   onSearchTitle,
   onOpenDetail,
+  subscribed,
 }: {
   profiles: RankResourceOption[];
   downloaders: RankResourceOption[];
@@ -719,7 +793,7 @@ export function GlobalRankBoard({
   const summary = overview?.find((item) => item.source === source);
   const boards = view?.boards ?? [];
   const copy = SOURCE_COPY[source];
-  const actions: MediaActions = { onSubscribe, onSearchTitle, onOpenDetail };
+  const actions: MediaActions = { onSubscribe, onSearchTitle, onOpenDetail, subscribed };
   const anyRefreshing = Boolean(overview?.some((item) => item.refreshing));
 
   return (
@@ -749,7 +823,7 @@ export function GlobalRankBoard({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-border bg-surface-container/35 px-3 py-2">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[min(100%,16rem)] flex-1">
           <p className="text-xs text-muted">{copy.note}</p>
           {view?.message ? <p role="status" className="mt-0.5 text-xs">最近刷新：{view.message}</p> : null}
         </div>

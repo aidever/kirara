@@ -257,6 +257,21 @@ pub struct MaoyanRankItem {
     /// 排片占比
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_rate: Option<String>,
+    /// 播放量（只有公开播放量的平台才有，如芒果TV）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play_count: Option<String>,
+    /// 主演（来自 TMDB 演职员表）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cast: Vec<String>,
+    /// TMDB 评分
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_rating: Option<f64>,
+    /// 上次查询 TMDB 评分 / 主演的时间
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_checked_at: Option<String>,
+    /// 上次补查豆瓣评分的时间
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub douban_checked_at: Option<String>,
     #[serde(default)]
     pub douban: Option<DoubanSubject>,
     pub tmdb: Option<TmdbMedia>,
@@ -275,6 +290,11 @@ impl MaoyanRankItem {
             heat: None,
             box_rate: None,
             show_rate: None,
+            play_count: None,
+            cast: Vec::new(),
+            tmdb_rating: None,
+            tmdb_checked_at: None,
+            douban_checked_at: None,
             douban: None,
             tmdb: None,
         }
@@ -462,6 +482,25 @@ impl MaoyanStore {
     }
 
     /// 已保存快照中的匹配结果，按（片名, 类型）索引；只收录匹配到 TMDB 的条目。
+    /// 之前快照里补充过的信息（豆瓣、TMDB 评分、主演），按（片名, 类型）复用。
+    pub async fn previous_extras(&self) -> HashMap<(String, &'static str), MaoyanRankItem> {
+        let entries = self.entries.lock().await;
+        let mut extras: HashMap<(String, &'static str), MaoyanRankItem> = HashMap::new();
+        for entry in entries.values() {
+            for item in &entry.items {
+                let key = (item.title.clone(), entry.chart.media_type().as_str());
+                let newer = extras.get(&key).is_none_or(|existing| {
+                    existing.tmdb_checked_at < item.tmdb_checked_at
+                        || existing.douban_checked_at < item.douban_checked_at
+                });
+                if newer {
+                    extras.insert(key, item.clone());
+                }
+            }
+        }
+        extras
+    }
+
     pub async fn previous_matches(&self) -> HashMap<(String, &'static str), MediaMatch> {
         let entries = self.entries.lock().await;
         let mut matches = HashMap::new();
@@ -567,6 +606,8 @@ pub fn chart_url(chart: MaoyanChart, platform: MaoyanPlatform, show_date: &str) 
             if let Some(code) = platform.code() {
                 url.push_str(&format!("&platformType={code}"));
             }
+            // 官网默认只给前 10 名，显式请求前 30 名。
+            url.push_str(&format!("&limit={MAOYAN_MAX_LIMIT}"));
             url
         }
     }
@@ -895,7 +936,10 @@ pub fn parse_chart(
                 item.box_office = number(entry.get("splitBox")).map(format_yuan);
                 item.heat = heat_value(entry);
             }
-            _ => item.heat = heat_value(entry),
+            _ => {
+                item.heat = heat_value(entry);
+                item.play_count = split_unit(entry.get("playCountSplitUnit"));
+            }
         }
         items.push(item);
     }
@@ -1136,6 +1180,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn heat_items_keep_the_published_play_count() {
+        let heat = json!({"dataList": {"list": [
+            {"barValue": 7017.64, "seriesInfo": {"name": "玉簪秋", "platformDesc": "芒果TV独播", "releaseInfo": "上线22天"}, "playCountSplitUnit": {"num": "8174.8", "unit": "万"}},
+            {"barValue": 6535.16, "seriesInfo": {"name": "兰香如故", "platformDesc": "腾讯视频独播"}, "playCountSplitUnit": null}
+        ]}});
+        let items = parse_chart(MaoyanChart::Tv, &heat, 30).unwrap();
+        assert_eq!(items[0].play_count.as_deref(), Some("8174.8万"));
+        assert_eq!(items[1].play_count, None);
+    }
+
+    #[test]
     fn parses_box_office_and_heat_payloads() {
         let movie = json!({"movieList": {"list": [
             {"movieInfo": {"movieName": "神探之痕迹", "releaseInfo": "上映36天"}, "sumBoxDesc": "6.71亿", "box": 70024890, "boxRate": "29.4%", "showCountRate": "15.8%", "boxSplitUnit": {"num": "70.02", "unit": "万"}},
@@ -1198,7 +1253,7 @@ mod tests {
     fn urls_follow_the_moviepilot_parameters() {
         assert_eq!(
             chart_url(MaoyanChart::WebSeries, MaoyanPlatform::Tencent, "20261105"),
-            "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=1&showDate=20261105&platformType=3"
+            "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=1&showDate=20261105&platformType=3&limit=30"
         );
         assert_eq!(
             chart_url(MaoyanChart::WebMovie, MaoyanPlatform::Tencent, "20261105"),
@@ -1212,7 +1267,7 @@ mod tests {
         );
         assert_eq!(
             chart_url(MaoyanChart::Variety, MaoyanPlatform::All, "20261105"),
-            "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=2&showDate=20261105"
+            "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=2&showDate=20261105&limit=30"
         );
     }
 

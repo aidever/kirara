@@ -23,6 +23,26 @@ const HISTORY_LIMIT: usize = 500;
 const DOUBAN_ROUND_BUDGET: usize = 150;
 /// 补评分期间每查完多少个片名把结果写回快照一次，界面可以逐步看到评分。
 const DOUBAN_PUBLISH_EVERY: usize = 12;
+/// 猫眼条目每轮最多补查多少部的 TMDB 评分与主演、多少个片名的豆瓣评分。
+const MAOYAN_TMDB_BUDGET: usize = 200;
+const MAOYAN_DOUBAN_BUDGET: usize = 60;
+/// 评分会随时间变化，补充信息超过这么多天重新查询。
+const EXTRAS_RECHECK_DAYS: i64 = 3;
+/// 猫眼条目展示的主演人数。
+const CAST_SIZE: usize = 4;
+
+type MaoyanParsed = (MaoyanChart, MaoyanPlatform, String, Vec<maoyan::MaoyanRankItem>);
+
+fn extras_due(checked: Option<&str>, now: chrono::DateTime<Utc>) -> bool {
+    match checked.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()) {
+        Some(checked) => now - checked.with_timezone(&Utc) >= chrono::Duration::days(EXTRAS_RECHECK_DAYS),
+        None => true,
+    }
+}
+
+fn has_douban_rating(item: &maoyan::MaoyanRankItem) -> bool {
+    item.douban.as_ref().is_some_and(|douban| douban.rating.is_some())
+}
 
 /// 刷新请求的结果，对应 GlobalRankPro 的 `RankSourceRefresh`。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -34,6 +54,143 @@ pub struct RankRefreshStatus {
 }
 
 impl MediaService {
+    // ---- 猫眼条目补充信息 ----
+
+    /// 给猫眼条目补上评分（豆瓣、TMDB）和主演。之前查到的直接沿用，到期才重查；
+    /// 豆瓣限流时停止，剩下的下一轮再补。
+    pub(super) async fn enrich_maoyan_items(
+        &self,
+        http: &reqwest::Client,
+        parsed: &mut [MaoyanParsed],
+    ) {
+        use futures::StreamExt;
+
+        let now = Utc::now();
+        let previous = self.maoyan.previous_extras().await;
+        for (chart, _, _, items) in parsed.iter_mut() {
+            let kind = chart.media_type().as_str();
+            for item in items.iter_mut() {
+                let Some(old) = previous.get(&(item.title.clone(), kind)) else {
+                    continue;
+                };
+                let same_tmdb = old.tmdb.as_ref().map(|media| media.tmdb_id)
+                    == item.tmdb.as_ref().map(|media| media.tmdb_id);
+                if same_tmdb {
+                    item.cast = old.cast.clone();
+                    item.tmdb_rating = old.tmdb_rating;
+                    item.tmdb_checked_at = old.tmdb_checked_at.clone();
+                }
+                if !has_douban_rating(item) {
+                    if has_douban_rating(old) {
+                        item.douban = old.douban.clone();
+                    } else {
+                        item.douban_checked_at = old.douban_checked_at.clone();
+                    }
+                }
+            }
+        }
+
+        // TMDB 评分与主演：一部作品一次请求。
+        let mut wanted = Vec::new();
+        let mut seen = HashSet::new();
+        for (_, _, _, items) in parsed.iter() {
+            for item in items {
+                if let Some(media) = &item.tmdb
+                    && extras_due(item.tmdb_checked_at.as_deref(), now)
+                    && seen.insert((media.tmdb_id, media.media_type.as_str()))
+                {
+                    wanted.push((media.tmdb_id, media.media_type.clone()));
+                }
+            }
+        }
+        wanted.truncate(MAOYAN_TMDB_BUDGET);
+        let mut tmdb_checked = 0usize;
+        if !wanted.is_empty()
+            && let Ok(tmdb) = self.tmdb_client().await
+        {
+            let tmdb = &tmdb;
+            let fetched: Vec<_> = futures::stream::iter(wanted)
+                .map(|(id, media_type)| async move {
+                    let result = tmdb.extras(id, media_type.clone(), CAST_SIZE).await;
+                    ((id, media_type.as_str()), result)
+                })
+                .buffer_unordered(6)
+                .collect()
+                .await;
+            let stamp = Utc::now().to_rfc3339();
+            let fetched: HashMap<_, _> = fetched
+                .into_iter()
+                .filter_map(|(key, result)| result.ok().map(|extras| (key, extras)))
+                .collect();
+            tmdb_checked = fetched.len();
+            for (_, _, _, items) in parsed.iter_mut() {
+                for item in items.iter_mut() {
+                    let Some(media) = &item.tmdb else { continue };
+                    if let Some(extras) = fetched.get(&(media.tmdb_id, media.media_type.as_str())) {
+                        item.cast = extras.cast.clone();
+                        item.tmdb_rating = extras.rating;
+                        item.tmdb_checked_at = Some(stamp.clone());
+                    }
+                }
+            }
+        }
+
+        // 豆瓣评分：匹配阶段没拿到评分的片名，用中文片名再搜一次。
+        let mut pending: Vec<(String, TmdbMediaType)> = Vec::new();
+        let mut seen = HashSet::new();
+        for (chart, _, _, items) in parsed.iter() {
+            let media_type = chart.media_type();
+            for item in items {
+                if !has_douban_rating(item)
+                    && extras_due(item.douban_checked_at.as_deref(), now)
+                    && seen.insert((item.title.clone(), media_type.as_str()))
+                {
+                    pending.push((item.title.clone(), media_type.clone()));
+                }
+            }
+        }
+        let douban = DoubanClient::new(http.clone());
+        let mut douban_checked = 0usize;
+        let mut douban_rated = 0usize;
+        let mut blocked = false;
+        for (title, media_type) in pending.into_iter().take(MAOYAN_DOUBAN_BUDGET) {
+            let found = match douban.search_rated(&title).await {
+                Ok(subjects) => maoyan::pick_douban(&title, &media_type, subjects),
+                Err(DoubanError::RateLimited) => {
+                    blocked = true;
+                    break;
+                }
+                Err(error) => {
+                    tracing::debug!(%error, title, "maoyan douban rating lookup failed");
+                    continue;
+                }
+            };
+            douban_checked += 1;
+            if found.as_ref().is_some_and(|subject| subject.rating.is_some()) {
+                douban_rated += 1;
+            }
+            let stamp = Utc::now().to_rfc3339();
+            for (chart, _, _, items) in parsed.iter_mut() {
+                if chart.media_type() != media_type {
+                    continue;
+                }
+                for item in items.iter_mut().filter(|item| item.title == title) {
+                    if found.is_some() {
+                        item.douban = found.clone();
+                    }
+                    item.douban_checked_at = Some(stamp.clone());
+                }
+            }
+        }
+        tracing::info!(
+            tmdb_checked,
+            douban_checked,
+            douban_rated,
+            douban_blocked = blocked,
+            "maoyan ratings and cast enriched"
+        );
+    }
+
     // ---- 设置 ----
 
     pub async fn rank_settings(&self) -> RankSettings {

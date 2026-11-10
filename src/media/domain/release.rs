@@ -28,6 +28,12 @@ pub struct ReleaseInfo {
     /// 整季资源标注的总集数（如「全30集」），未标注时为空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_episodes: Option<u32>,
+    /// 副标题里单独写出的年份（如「宿敌 | 2024 | 中国大陆」），用于排除同名的旧剧。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_year: Option<u32>,
+    /// 种子在站点上的发布年份。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_year: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Error)]
@@ -194,6 +200,8 @@ impl ReleaseParser {
             release_group,
             matched_rule: matched_rule.to_owned(),
             total_episodes,
+            subtitle_year: None,
+            published_year: None,
         })
     }
 
@@ -210,6 +218,7 @@ impl ReleaseParser {
         let Some(subtitle) = subtitle.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(release);
         };
+        release.subtitle_year = self.subtitle_year(subtitle);
         if !release.episodes.is_empty() || !release.absolute_episodes.is_empty() {
             return Ok(release);
         }
@@ -304,6 +313,16 @@ impl ReleaseParser {
             return None;
         }
         self.expand_range(1, end).ok()
+    }
+
+    /// 副标题中以分隔符隔开的独立年份，例如「宿敌 | 2024 | 中国大陆」。
+    fn subtitle_year(&self, subtitle: &str) -> Option<u32> {
+        subtitle
+            .split(|c: char| matches!(c, '|' | '｜' | '/' | '／' | '[' | ']' | '【' | '】') || c.is_whitespace())
+            .map(str::trim)
+            .filter(|token| token.len() == 4 && token.bytes().all(|byte| byte.is_ascii_digit()))
+            .filter_map(|token| token.parse().ok())
+            .find(|year| self.is_plausible_year(*year))
     }
 
     fn strip_trailing_year(&self, title: &str) -> Option<String> {

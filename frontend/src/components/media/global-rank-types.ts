@@ -48,6 +48,9 @@ export type RankItem = {
   heat?: string;
   box_rate?: string;
   show_rate?: string;
+  play_count?: string;
+  cast?: string[];
+  tmdb_rating?: number;
   // Netflix
   season_title?: string;
   hours_viewed?: number;
@@ -188,4 +191,6 @@ export type RankDetailTarget = {
   mediaType: "tv" | "movie";
   douban: RankDoubanSubject | null;
   tmdb: RankTmdbMedia | null;
+  cast?: string[];
+  tmdbRating?: number | null;
 };

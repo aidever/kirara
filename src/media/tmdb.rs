@@ -263,6 +263,28 @@ impl TmdbClient {
         map_details(raw, media_type)
     }
 
+    /// 评分与主演：一次详情请求附带演职员表（剧集用汇总演职员表，覆盖所有季）。
+    pub async fn extras(
+        &self,
+        tmdb_id: i64,
+        media_type: TmdbMediaType,
+        cast_limit: usize,
+    ) -> Result<TmdbExtras, TmdbError> {
+        let credits = match media_type {
+            TmdbMediaType::Tv => "aggregate_credits",
+            TmdbMediaType::Movie => "credits",
+        };
+        let request = self
+            .client
+            .get(format!("{TMDB_API_BASE}/{}/{tmdb_id}", media_type.as_str()));
+        let request = self.authorize(request).query(&[
+            ("language", self.language.as_str()),
+            ("append_to_response", credits),
+        ]);
+        let raw: RawExtras = self.send_json(request).await?;
+        Ok(map_extras(raw, cast_limit))
+    }
+
     pub async fn season(&self, tmdb_id: i64, season_number: u32) -> Result<TmdbSeason, TmdbError> {
         let request = self.client.get(format!(
             "{TMDB_API_BASE}/tv/{tmdb_id}/season/{season_number}"
@@ -385,6 +407,72 @@ struct RawMedia {
     poster_path: Option<String>,
     #[serde(default)]
     genre_ids: Vec<i64>,
+}
+
+#[derive(Deserialize)]
+struct RawCredits {
+    #[serde(default)]
+    cast: Vec<RawCastMember>,
+}
+
+#[derive(Deserialize)]
+struct RawExtras {
+    #[serde(default)]
+    vote_average: Option<f64>,
+    #[serde(default)]
+    vote_count: Option<u64>,
+    #[serde(default)]
+    credits: Option<RawCredits>,
+    #[serde(default)]
+    aggregate_credits: Option<RawCredits>,
+}
+
+/// TMDB 评分与主演。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TmdbExtras {
+    /// 评分（0–10）；评分人数太少时为空，避免一两个人打的分误导。
+    pub rating: Option<f64>,
+    pub cast: Vec<String>,
+}
+
+/// 至少这么多人评分才展示 TMDB 评分。
+const MIN_TMDB_VOTES: u64 = 5;
+
+fn map_extras(raw: RawExtras, cast_limit: usize) -> TmdbExtras {
+    let rating = raw
+        .vote_average
+        .filter(|value| *value > 0.0 && raw.vote_count.unwrap_or(0) >= MIN_TMDB_VOTES)
+        .map(|value| (value * 10.0).round() / 10.0);
+    let cast = raw
+        .aggregate_credits
+        .or(raw.credits)
+        .map(|credits| map_cast(credits, cast_limit))
+        .unwrap_or_default();
+    TmdbExtras { rating, cast }
+}
+
+#[derive(Deserialize)]
+struct RawCastMember {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    order: Option<i64>,
+}
+
+fn map_cast(raw: RawCredits, limit: usize) -> Vec<String> {
+    let mut cast = raw.cast;
+    cast.sort_by_key(|member| member.order.unwrap_or(i64::MAX));
+    let mut names: Vec<String> = Vec::new();
+    for member in cast {
+        let name = member.name.trim();
+        if !name.is_empty() && !names.iter().any(|existing| existing == name) {
+            names.push(name.to_string());
+        }
+        if names.len() >= limit {
+            break;
+        }
+    }
+    names
 }
 
 #[derive(Deserialize)]
@@ -762,5 +850,35 @@ mod tests {
             TmdbError::MissingToken.to_string(),
             "TMDB token is not configured"
         );
+    }
+
+    #[test]
+    fn cast_follows_billing_order_and_skips_blank_or_duplicate_names() {
+        let raw: RawCredits = serde_json::from_value(serde_json::json!({
+            "cast": [
+                {"name": "孙艺洲", "order": 1},
+                {"name": "井柏然", "order": 0},
+                {"name": " ", "order": 2},
+                {"name": "井柏然", "order": 3},
+                {"name": "张颂文", "order": 4},
+                {"name": "王鸥"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(map_cast(raw, 3), vec!["井柏然", "孙艺洲", "张颂文"]);
+    }
+
+    #[test]
+    fn extras_hide_ratings_with_too_few_votes() {
+        let raw: RawExtras = serde_json::from_value(serde_json::json!({
+            "vote_average": 7.846, "vote_count": 120,
+            "aggregate_credits": {"cast": [{"name": "井柏然", "order": 0}]}
+        }))
+        .unwrap();
+        assert_eq!(map_extras(raw, 4), TmdbExtras { rating: Some(7.8), cast: vec!["井柏然".into()] });
+
+        let raw: RawExtras =
+            serde_json::from_value(serde_json::json!({"vote_average": 10.0, "vote_count": 1})).unwrap();
+        assert_eq!(map_extras(raw, 4).rating, None);
     }
 }

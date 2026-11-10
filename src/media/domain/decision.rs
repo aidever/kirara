@@ -128,15 +128,7 @@ impl IdentityGate {
             );
         }
 
-        if let (Some(expected), Some(actual)) = (target.year(), release.year) {
-            if expected != actual {
-                push_rejection(
-                    &mut rejections,
-                    RejectCode::WrongYear,
-                    format!("release year {actual} does not match target year {expected}"),
-                );
-            }
-        }
+        check_year(&mut rejections, target, release);
 
         match target {
             MediaTarget::Movie { .. } => {}
@@ -338,6 +330,56 @@ impl DecisionEngine {
     }
 }
 
+/// 电影要求年份一致；剧集的年份是首播年份，后续季可以更晚，但不会更早。
+/// 副标题年份和发布时间早于首播一年以上的，多半是同名的另一部剧（如 2024 年的《宿敌》
+/// 与 2026 年的《谷雨》英文名都是 The Silent Storm）。
+fn check_year(rejections: &mut Vec<MatchRejection>, target: &MediaTarget, release: &ReleaseInfo) {
+    let Some(expected) = target.year() else {
+        return;
+    };
+    if matches!(target, MediaTarget::Movie { .. }) {
+        if let Some(actual) = release.year
+            && actual != expected
+        {
+            push_rejection(
+                rejections,
+                RejectCode::WrongYear,
+                format!("release year {actual} does not match target year {expected}"),
+            );
+        }
+        return;
+    }
+    if let Some(actual) = release.year
+        && actual < expected
+    {
+        push_rejection(
+            rejections,
+            RejectCode::WrongYear,
+            format!("release year {actual} is before the series premiere year {expected}"),
+        );
+        return;
+    }
+    if let Some(actual) = release.subtitle_year
+        && actual + 1 < expected
+    {
+        push_rejection(
+            rejections,
+            RejectCode::WrongYear,
+            format!("subtitle year {actual} is before the series premiere year {expected}"),
+        );
+        return;
+    }
+    if let Some(published) = release.published_year
+        && published + 1 < expected
+    {
+        push_rejection(
+            rejections,
+            RejectCode::WrongYear,
+            format!("release was published in {published}, before the series premiered in {expected}"),
+        );
+    }
+}
+
 fn score(
     target: &MediaTarget,
     release: &ReleaseInfo,
@@ -345,6 +387,11 @@ fn score(
 ) -> ScoreBreakdown {
     let year = match (target.year(), release.year) {
         (Some(expected), Some(actual)) if expected == actual => 10,
+        (Some(expected), Some(actual))
+            if actual > expected && !matches!(target, MediaTarget::Movie { .. }) =>
+        {
+            10
+        }
         (Some(_), None) => 5,
         (None, _) => 10,
         _ => 0,
@@ -701,5 +748,62 @@ mod tests {
         let release =
             parse("The Silent Storm 2026 S01 E09-10 2160p Youku WEB-DL HFR H265 AAC-Momoda");
         assert!(IdentityGate::matches_series(&target, &release));
+    }
+
+    fn silent_storm_target(episode: u32) -> MediaTarget {
+        MediaTarget::Episode {
+            tmdb_id: 279155,
+            titles: vec!["谷雨".into(), "The Silent Storm".into()],
+            year: Some(2026),
+            season: 1,
+            episode,
+            allow_season_pack: true,
+        }
+    }
+
+    #[test]
+    fn same_named_older_series_is_rejected_by_subtitle_or_publish_year() {
+        let parser = ReleaseParser::with_limits(50, 2027);
+        let title = "The Silent Storm S01E14 1080p TX WEB-DL AAC2.0 H.264-MWeb";
+        let subtitle = "宿敌 | 2024 | 中国大陆 | 剧情 悬疑 犯罪 | 奇道 | 廖凡 朱珠 | 第1季第14集";
+
+        let by_subtitle = parser.parse_with_subtitle(title, Some(subtitle)).unwrap();
+        assert_eq!(by_subtitle.subtitle_year, Some(2024));
+        let decision = DecisionEngine::evaluate(&silent_storm_target(14), &by_subtitle, &profile(), 100);
+        assert!(codes(&decision).contains(&RejectCode::WrongYear));
+
+        let mut by_publish = parse(title);
+        by_publish.published_year = Some(2024);
+        let decision = DecisionEngine::evaluate(&silent_storm_target(14), &by_publish, &profile(), 100);
+        assert!(codes(&decision).contains(&RejectCode::WrongYear));
+        assert!(!IdentityGate::matches_series(&silent_storm_target(0), &by_publish));
+
+        let mut current = parser
+            .parse_with_subtitle(
+                "The Silent Storm 2026 S01E11 1080p YOKU WEB-DL H264 AAC-UBWEB",
+                Some("谷雨 | 2026 | 第11集"),
+            )
+            .unwrap();
+        current.published_year = Some(2026);
+        let decision = DecisionEngine::evaluate(&silent_storm_target(11), &current, &profile(), 100);
+        assert!(decision.accepted, "{:?}", decision.rejections);
+    }
+
+    #[test]
+    fn later_seasons_may_carry_a_later_year_but_movies_must_match() {
+        let mut target = silent_storm_target(1);
+        if let MediaTarget::Episode { season, .. } = &mut target {
+            *season = 2;
+        }
+        let release = parse("The Silent Storm 2027 S02E01 1080p WEB-DL H264-GROUP");
+        let decision = DecisionEngine::evaluate(&target, &release, &profile(), 100);
+        assert!(decision.accepted, "{:?}", decision.rejections);
+        assert_eq!(decision.breakdown.year, 10);
+
+        let mut published_last_december = parse("The Silent Storm S01E01 1080p WEB-DL H264-GROUP");
+        published_last_december.published_year = Some(2025);
+        let decision =
+            DecisionEngine::evaluate(&silent_storm_target(1), &published_last_december, &profile(), 100);
+        assert!(!codes(&decision).contains(&RejectCode::WrongYear));
     }
 }

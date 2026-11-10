@@ -161,6 +161,14 @@ pub struct RankItem {
     pub box_rate: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_rate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play_count: Option<String>,
+    /// 主演
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cast: Vec<String>,
+    /// TMDB 评分
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_rating: Option<f64>,
 
     // ---- Netflix ----
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2304,6 +2312,10 @@ pub fn maoyan_board(response: MaoyanRankResponse, error: Option<&str>) -> RankBo
                 heat: item.heat,
                 box_rate: item.box_rate,
                 show_rate: item.show_rate,
+                play_count: item.play_count,
+                cast: item.cast,
+                tmdb_rating: item.tmdb_rating,
+                douban_checked_at: item.douban_checked_at,
                 douban: item.douban,
                 tmdb: item.tmdb,
                 ..RankItem::default()

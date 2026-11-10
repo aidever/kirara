@@ -2307,6 +2307,7 @@ export function MediaPage() {
           profiles={profiles}
           downloaders={downloaders}
           sites={sites}
+          subscriptions={subscriptions}
           onSubscribe={(media) => void openSubscriptionDialog(media)}
           onSearchTitle={(title, type) => {
             // 未匹配到 TMDB 的条目转到“添加影视”手动搜索。
@@ -4456,10 +4457,20 @@ function RankDetailDialog({
                 <p className="text-sm text-muted">{douban?.original_title || media?.original_title}</p>
               ) : null}
               {meta ? <p className="text-sm">{meta}</p> : null}
-              {rating ? (
-                <p className="text-sm">
-                  <span className="text-lg font-semibold tabular-nums">{rating.toFixed(1)}</span>
-                  <span className="ml-1 text-muted">豆瓣{douban?.rating_count ? ` · ${formatCount(douban.rating_count)}人评价` : ""}</span>
+              {rating || item.tmdbRating ? (
+                <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+                  {rating ? (
+                    <span>
+                      <span className="text-lg font-semibold tabular-nums">{rating.toFixed(1)}</span>
+                      <span className="ml-1 text-muted">豆瓣{douban?.rating_count ? ` · ${formatCount(douban.rating_count)}人评价` : ""}</span>
+                    </span>
+                  ) : null}
+                  {item.tmdbRating ? (
+                    <span>
+                      <span className="text-lg font-semibold tabular-nums">{item.tmdbRating.toFixed(1)}</span>
+                      <span className="ml-1 text-muted">TMDB</span>
+                    </span>
+                  ) : null}
                 </p>
               ) : item.douban ? <p className="text-sm text-muted">豆瓣暂无评分</p> : null}
               {media ? (
@@ -4476,10 +4487,15 @@ function RankDetailDialog({
               <RefreshCw className="size-4 animate-spin" aria-hidden="true" />正在获取详情
             </p>
           ) : null}
+          {!douban && item.cast?.length ? (
+            <dl className="flex flex-col gap-1.5">
+              <DetailRow label="主演" value={item.cast.join(" / ")} />
+            </dl>
+          ) : null}
           {douban ? (
             <dl className="flex flex-col gap-1.5">
               <DetailRow label="导演" value={douban.directors.join(" / ")} />
-              <DetailRow label="主演" value={douban.actors.join(" / ")} />
+              <DetailRow label="主演" value={douban.actors.join(" / ") || item.cast?.join(" / ")} />
               <DetailRow label="上映" value={douban.pubdate.join(" / ")} />
               <DetailRow label="语言" value={douban.languages.join(" / ")} />
               <DetailRow label="又名" value={douban.aka.slice(0, 4).join(" / ")} />
@@ -4506,14 +4522,20 @@ function GlobalRankSection({
   sites,
   onSubscribe,
   onSearchTitle,
+  subscriptions,
 }: {
   profiles: QualityProfile[];
   downloaders: Downloader[];
   sites: Site[];
   onSubscribe: (media: TmdbMedia) => void;
   onSearchTitle: (title: string, type: MediaType) => void;
+  subscriptions: Subscription[];
 }) {
   const [detail, setDetail] = useState<RankDetailTarget | null>(null);
+  const subscribed = useMemo(
+    () => new Set(subscriptions.map((subscription) => `${subscription.media_type}:${subscription.tmdb_id}`)),
+    [subscriptions],
+  );
   return (
     <>
       <GlobalRankBoard
@@ -4523,6 +4545,7 @@ function GlobalRankSection({
         onSubscribe={(media) => onSubscribe(media as TmdbMedia)}
         onSearchTitle={onSearchTitle}
         onOpenDetail={setDetail}
+        subscribed={subscribed}
       />
       <RankDetailDialog
         item={detail}
