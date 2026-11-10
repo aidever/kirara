@@ -345,6 +345,7 @@ mod tests {
             revision: None,
             release_group: None,
             matched_rule: "quality_only".into(),
+            total_episodes: None,
         }
     }
 

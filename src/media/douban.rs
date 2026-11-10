@@ -39,6 +39,11 @@ static DOUBAN_CONCURRENCY: LazyLock<Semaphore> =
 static DOUBAN_NEXT_SLOT: LazyLock<Mutex<Instant>> = LazyLock::new(|| Mutex::new(Instant::now()));
 static FRODO_BLOCKED_UNTIL: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
+/// 移动站搜索接口：同样一次请求带评分，frodo 受限时用它补评分。
+const REXXAR_SEARCH: &str = "https://m.douban.com/rexxar/api/v2/search";
+const REXXAR_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+static REXXAR_BLOCKED_UNTIL: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
+
 async fn frodo_blocked() -> bool {
     FRODO_BLOCKED_UNTIL
         .lock()
@@ -140,7 +145,10 @@ fn sign(path: &str, ts: &str) -> String {
 
 fn today() -> String {
     let shanghai = FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid offset");
-    Utc::now().with_timezone(&shanghai).format("%Y%m%d").to_string()
+    Utc::now()
+        .with_timezone(&shanghai)
+        .format("%Y%m%d")
+        .to_string()
 }
 
 async fn wait_for_slot() {
@@ -207,7 +215,9 @@ pub async fn fetch_poster(client: &Client, id: &str) -> Result<String, DoubanErr
         return Err(DoubanError::Parse("invalid poster id".to_string()));
     }
     let response = client
-        .get(format!("https://img2.doubanio.com/view/photo/s_ratio_poster/public/{id}.jpg"))
+        .get(format!(
+            "https://img2.doubanio.com/view/photo/s_ratio_poster/public/{id}.jpg"
+        ))
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header(reqwest::header::REFERER, "https://movie.douban.com/")
         .timeout(Duration::from_secs(15))
@@ -269,6 +279,43 @@ pub fn parse_search(payload: &Value) -> Vec<DoubanSubject> {
         .collect()
 }
 
+/// 移动站搜索结果：`subjects.items[].target`，类型只能从 `uri`（`douban://douban.com/tv/<id>`）判断。
+pub fn parse_rexxar_search(payload: &Value) -> Vec<DoubanSubject> {
+    let Some(items) = payload.pointer("/subjects/items").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let target = item.get("target")?;
+            let uri = target
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let media_type = if uri.contains("/tv/") {
+                TmdbMediaType::Tv
+            } else if uri.contains("/movie/") {
+                TmdbMediaType::Movie
+            } else {
+                media_type_of(item.get("target_type").and_then(Value::as_str)?)?
+            };
+            let id = string(target.get("id"))?;
+            Some(DoubanSubject {
+                url: format!("https://movie.douban.com/subject/{id}/"),
+                id,
+                title: string(target.get("title"))?,
+                year: parse_year(target.get("year")),
+                rating: target
+                    .pointer("/rating/value")
+                    .and_then(Value::as_f64)
+                    .filter(|value| *value > 0.0),
+                poster_id: string(target.get("cover_url")).and_then(|url| poster_id(&url)),
+                media_type,
+            })
+        })
+        .collect()
+}
+
 /// 网页版联想接口：`episode` 非空的是剧集；没有评分。
 pub fn parse_suggest(payload: &Value) -> Vec<DoubanSubject> {
     let Some(items) = payload.as_array() else {
@@ -303,7 +350,12 @@ pub fn parse_suggest(payload: &Value) -> Vec<DoubanSubject> {
 fn strings(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(|value| string(Some(value))).collect())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| string(Some(value)))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -467,6 +519,65 @@ impl DoubanClient {
         }
     }
 
+    /// 带评分的搜索（榜单补评分用）：frodo 受限时改走移动站搜索。两个接口都不可用时返回
+    /// 错误而不是空结果，调用方不应把它当成“豆瓣没有收录”。
+    pub async fn search_rated(&self, query: &str) -> Result<Vec<DoubanSubject>, DoubanError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self
+            .get("/search/movie", &[("q", query), ("count", "10")])
+            .await
+        {
+            Ok(payload) => Ok(parse_search(&payload)),
+            Err(error) => {
+                tracing::debug!(%error, query, "douban frodo search failed, trying mobile search");
+                self.rexxar_search(query).await
+            }
+        }
+    }
+
+    async fn rexxar_search(&self, query: &str) -> Result<Vec<DoubanSubject>, DoubanError> {
+        if REXXAR_BLOCKED_UNTIL
+            .lock()
+            .await
+            .is_some_and(|until| until > Instant::now())
+        {
+            return Err(DoubanError::RateLimited);
+        }
+        let response = {
+            let _permit = DOUBAN_CONCURRENCY
+                .acquire()
+                .await
+                .expect("douban semaphore is never closed");
+            wait_for_slot().await;
+            self.client
+                .get(REXXAR_SEARCH)
+                .query(&[("q", query), ("start", "0"), ("count", "10")])
+                .header(reqwest::header::USER_AGENT, WEB_USER_AGENT)
+                .header(reqwest::header::REFERER, "https://m.douban.com/")
+                .timeout(Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(|error| DoubanError::Transport(error.without_url().to_string()))?
+        };
+        let status = response.status();
+        if matches!(status.as_u16(), 403 | 419 | 429) {
+            *REXXAR_BLOCKED_UNTIL.lock().await = Some(Instant::now() + REXXAR_COOLDOWN);
+            tracing::warn!("douban mobile search is rate limited; ratings will be retried later");
+            return Err(DoubanError::RateLimited);
+        }
+        if !status.is_success() {
+            return Err(DoubanError::Http(status.as_u16()));
+        }
+        let payload = response
+            .json::<Value>()
+            .await
+            .map_err(|error| DoubanError::Parse(error.to_string()))?;
+        Ok(parse_rexxar_search(&payload))
+    }
+
     async fn suggest(&self, query: &str) -> Result<Vec<DoubanSubject>, DoubanError> {
         let response = {
             let _permit = DOUBAN_CONCURRENCY
@@ -499,18 +610,27 @@ impl DoubanClient {
     }
 
     /// 完整条目信息（详情弹窗用）。
-    pub async fn info(&self, media_type: TmdbMediaType, id: &str) -> Result<DoubanInfo, DoubanError> {
+    pub async fn info(
+        &self,
+        media_type: TmdbMediaType,
+        id: &str,
+    ) -> Result<DoubanInfo, DoubanError> {
         if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(DoubanError::Parse("invalid subject id".to_string()));
         }
-        let payload = self.get(&format!("/{}/{id}", media_type.as_str()), &[]).await?;
+        let payload = self
+            .get(&format!("/{}/{id}", media_type.as_str()), &[])
+            .await?;
         parse_info(&payload, media_type, id)
             .ok_or_else(|| DoubanError::Parse("缺少标题".to_string()))
     }
 
     pub async fn detail(&self, subject: &DoubanSubject) -> Result<DoubanDetail, DoubanError> {
         let payload = self
-            .get(&format!("/{}/{}", subject.media_type.as_str(), subject.id), &[])
+            .get(
+                &format!("/{}/{}", subject.media_type.as_str(), subject.id),
+                &[],
+            )
             .await?;
         Ok(parse_detail(&payload))
     }
@@ -532,7 +652,10 @@ mod tests {
     fn signature_encodes_the_path() {
         // 与开源实现一致：路径整体 URL 编码（斜杠也编码）。
         assert_eq!(
-            format!("GET&{}&20261105", urlencoding::encode("/api/v2/search/movie")),
+            format!(
+                "GET&{}&20261105",
+                urlencoding::encode("/api/v2/search/movie")
+            ),
             "GET&%2Fapi%2Fv2%2Fsearch%2Fmovie&20261105"
         );
         assert!(!sign("/api/v2/search/movie", "20261105").is_empty());
@@ -582,7 +705,9 @@ mod tests {
         assert_eq!(info.rating_count, Some(284013));
         assert_eq!(info.poster_id.as_deref(), Some("p2936709341"));
 
-        let detail = parse_detail(&json!({"original_title": "", "aka": ["刘医生返乡记", " "], "imdb": "tt1234567"}));
+        let detail = parse_detail(
+            &json!({"original_title": "", "aka": ["刘医生返乡记", " "], "imdb": "tt1234567"}),
+        );
         assert_eq!(detail.original_title, None);
         assert_eq!(detail.aka, vec!["刘医生返乡记".to_string()]);
         assert_eq!(detail.imdb.as_deref(), Some("tt1234567"));
@@ -595,8 +720,9 @@ mod tests {
         let client = DoubanClient::new(Client::new());
         let subject = match client.search("小城良方").await {
             Ok(subjects) => {
-                let subject = crate::media::maoyan::pick_douban("小城良方", &TmdbMediaType::Tv, subjects)
-                    .expect("matched");
+                let subject =
+                    crate::media::maoyan::pick_douban("小城良方", &TmdbMediaType::Tv, subjects)
+                        .expect("matched");
                 assert_eq!(subject.year, Some(2026));
                 subject
             }
@@ -615,7 +741,10 @@ mod tests {
             Err(error) => panic!("search: {error}"),
         };
         match client.detail(&subject).await {
-            Ok(detail) => assert!(detail.aka.iter().any(|name| name == "刘医生返乡记"), "{detail:?}"),
+            Ok(detail) => assert!(
+                detail.aka.iter().any(|name| name == "刘医生返乡记"),
+                "{detail:?}"
+            ),
             Err(DoubanError::RateLimited) => eprintln!("frodo is rate limited; detail skipped"),
             Err(error) => panic!("detail: {error}"),
         }
@@ -632,16 +761,43 @@ mod tests {
         if suggested.is_empty() {
             eprintln!("web suggest returned nothing (likely throttled)");
         } else {
-            assert!(crate::media::maoyan::pick_douban("空枪", &TmdbMediaType::Movie, suggested).is_some());
+            assert!(
+                crate::media::maoyan::pick_douban("空枪", &TmdbMediaType::Movie, suggested)
+                    .is_some()
+            );
         }
         match client.search("生化危机：爆发夜").await {
-            Ok(movie) => assert!(crate::media::maoyan::pick_douban("生化危机：爆发夜", &TmdbMediaType::Movie, movie).is_some()),
+            Ok(movie) => assert!(
+                crate::media::maoyan::pick_douban("生化危机：爆发夜", &TmdbMediaType::Movie, movie)
+                    .is_some()
+            ),
             Err(DoubanError::RateLimited) => eprintln!("douban search is rate limited"),
             Err(error) => panic!("movie search: {error}"),
         }
-        let poster = fetch_poster(&Client::new(), subject.poster_id.as_deref().expect("poster id"))
-            .await
-            .expect("poster");
+        let poster = fetch_poster(
+            &Client::new(),
+            subject.poster_id.as_deref().expect("poster id"),
+        )
+        .await
+        .expect("poster");
         assert!(poster.starts_with("data:image/"));
+    }
+
+    #[test]
+    fn parses_mobile_search_results_with_rating() {
+        let payload = serde_json::json!({"subjects": {"items": [
+            {"target_type": "tv", "target": {"id": "34812928", "title": "鱿鱼游戏 第三季", "year": "2025", "uri": "douban://douban.com/tv/34812928", "rating": {"value": 6.4}, "cover_url": "https://img1.doubanio.com/view/photo/m_ratio_poster/public/p2921234567.jpg"}},
+            {"target_type": "movie", "target": {"id": "1291546", "title": "霸王别姬", "year": "1993", "uri": "douban://douban.com/movie/1291546", "rating": {"value": 0}}},
+            {"target_type": "book", "target": {"id": "1", "title": "书", "uri": "douban://douban.com/book/1"}}
+        ]}});
+        let subjects = parse_rexxar_search(&payload);
+        assert_eq!(subjects.len(), 2);
+        assert_eq!(subjects[0].media_type, TmdbMediaType::Tv);
+        assert_eq!(subjects[0].rating, Some(6.4));
+        assert_eq!(subjects[0].year, Some(2025));
+        assert_eq!(subjects[0].poster_id.as_deref(), Some("p2921234567"));
+        assert_eq!(subjects[1].media_type, TmdbMediaType::Movie);
+        assert_eq!(subjects[1].rating, None);
+        assert!(parse_rexxar_search(&serde_json::json!({"msg": "need_login"})).is_empty());
     }
 }

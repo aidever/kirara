@@ -43,9 +43,53 @@ impl Database {
                 .prepare("SELECT source, payload FROM global_rank_snapshots")
                 .map_err(sql_error)?;
             let rows = statement
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
                 .map_err(sql_error)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(sql_error)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    /// 全球榜单的设置与自动订阅记录（JSON），按 key 存取。
+    pub async fn get_global_rank_state(
+        &self,
+        key: &'static str,
+    ) -> Result<Option<String>, AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            conn.query_row(
+                "SELECT payload FROM global_rank_state WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sql_error)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    pub async fn set_global_rank_state(
+        &self,
+        key: &'static str,
+        payload: String,
+    ) -> Result<(), AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            conn.execute(
+                "INSERT INTO global_rank_state (key, payload, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                    payload = excluded.payload, updated_at = excluded.updated_at",
+                params![key, payload, chrono::Utc::now().to_rfc3339()],
+            )
+            .map_err(sql_error)?;
+            Ok(())
         })
         .await
         .map_err(join_error)?

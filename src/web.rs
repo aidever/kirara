@@ -33,6 +33,7 @@ use crate::downloader::{DownloaderClient, DownloaderClientPool};
 use crate::error::AppError;
 use crate::indexer::IndexerError;
 use crate::media::domain::{MediaTarget, ReleaseInfo, ReleaseParser};
+use crate::media::models::MediaGroupUpgradeRecord;
 use crate::media::models::{
     MediaDownloadDeletion, MediaDownloadRecord, MediaSettings, QualityProfileRecord,
     QualityProfileRequest, SubscriptionRecord, UpdateSubscription, media_download_category,
@@ -41,10 +42,8 @@ use crate::media::scheduler::MediaScheduler;
 use crate::media::service::{
     CreateSubscriptionRequest, FailedDownloadReconciliation, MediaService, MediaServiceError,
     QueueDownloadRequest, ReleaseGroupProbeRequest, ReleaseGroupProbeResponse,
-    ResourceSearchRequest, ResourceSearchResponse, SubscriptionRunResult,
-    SubscriptionRunSnapshot,
+    ResourceSearchRequest, ResourceSearchResponse, SubscriptionRunResult, SubscriptionRunSnapshot,
 };
-use crate::media::models::MediaGroupUpgradeRecord;
 use crate::media::tmdb::{TmdbDetails, TmdbError, TmdbMedia, TmdbMediaType, TmdbSeason};
 use crate::monitor::{SystemMonitor, SystemSnapshot, SystemSnapshotRecord};
 use crate::net::client_factory;
@@ -435,6 +434,16 @@ fn media_router(
         .route("/maoyan/refresh", post(refresh_maoyan_rank))
         .route("/global-rank", get(get_global_rank))
         .route("/global-rank/refresh", post(refresh_global_rank))
+        .route("/global-rank/overview", get(get_global_rank_overview))
+        .route(
+            "/global-rank/settings",
+            get(get_global_rank_settings).put(update_global_rank_settings),
+        )
+        .route(
+            "/global-rank/history",
+            get(get_global_rank_history).delete(clear_global_rank_history),
+        )
+        .route("/global-rank/poster", get(get_global_rank_poster))
         .route("/douban/poster", get(get_douban_poster))
         .route("/douban/subject", get(get_douban_subject))
         .route("/tmdb/details", get(get_tmdb_details_query))
@@ -1501,10 +1510,12 @@ async fn get_maoyan_rank(
 ) -> Result<Json<crate::media::maoyan::MaoyanRankView>, ApiError> {
     use crate::media::maoyan::{MaoyanChart, MaoyanPlatform};
     let chart = MaoyanChart::parse(&query.chart).ok_or_else(|| {
-        ApiError::bad_request("chart must be movie, web_movie, tv, web_series, variety, total, year, or global")
+        ApiError::bad_request("chart must be movie, web_movie, web_all, tv, web_series, variety, total, year, or global")
     })?;
-    let platform = MaoyanPlatform::parse(query.platform.as_deref().unwrap_or("all"))
-        .ok_or_else(|| ApiError::bad_request("platform must be all, tencent, iqiyi, youku, or mango"))?;
+    let platform =
+        MaoyanPlatform::parse(query.platform.as_deref().unwrap_or("all")).ok_or_else(|| {
+            ApiError::bad_request("platform must be all, tencent, iqiyi, youku, or mango")
+        })?;
     Ok(Json(
         state
             .service
@@ -1545,7 +1556,10 @@ async fn get_douban_subject(
     Query(query): Query<DoubanSubjectQuery>,
 ) -> Result<Json<crate::media::douban::DoubanInfo>, ApiError> {
     let media_type = parse_tmdb_media_type(&query.media_type)?;
-    if query.id.is_empty() || query.id.len() > 20 || !query.id.bytes().all(|byte| byte.is_ascii_digit()) {
+    if query.id.is_empty()
+        || query.id.len() > 20
+        || !query.id.bytes().all(|byte| byte.is_ascii_digit())
+    {
         return Err(ApiError::bad_request("invalid douban subject id"));
     }
     Ok(Json(
@@ -1560,29 +1574,125 @@ async fn get_douban_subject(
 #[derive(Debug, Deserialize)]
 struct GlobalRankQuery {
     source: String,
+    // 不能用 serde(flatten)：查询串展平后数字字段会被当成字符串而解析失败。
+    board_type: Option<String>,
+    kind: Option<String>,
+    limit: Option<usize>,
+    board: Option<String>,
+    platform: Option<String>,
 }
 
 fn parse_rank_source(value: &str) -> Result<crate::media::global_rank::RankSource, ApiError> {
     crate::media::global_rank::RankSource::parse(value)
-        .ok_or_else(|| ApiError::bad_request("source must be netflix, hongguo, or music"))
+        .ok_or_else(|| ApiError::bad_request("source must be maoyan, netflix, hongguo, or music"))
 }
 
-/// 全球榜单（Netflix / 红果短剧 / 音乐）：返回后台快照，不在请求内抓取。
+/// 全球榜单（猫眼 / Netflix / 红果短剧 / 音乐）：返回后台快照，不在请求内抓取。
+/// 过滤参数与 GlobalRankPro 的 `/rank` 一致：board_type、kind、limit、board、platform。
 async fn get_global_rank(
     State(state): State<MediaApiState>,
     Query(query): Query<GlobalRankQuery>,
 ) -> Result<Json<crate::media::global_rank::RankSourceView>, ApiError> {
     let source = parse_rank_source(&query.source)?;
-    Ok(Json(state.service.global_rank(source).await))
+    let filter = crate::media::global_rank::RankFilter {
+        board_type: query.board_type,
+        kind: query.kind,
+        limit: query.limit,
+        board: query.board,
+        platform: query.platform,
+    };
+    Ok(Json(state.service.global_rank(source, &filter).await))
+}
+
+/// 数据源总览：各来源的榜单数、条目数、更新时间与刷新状态。
+async fn get_global_rank_overview(State(state): State<MediaApiState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "sources": state.service.global_rank_overview().await }))
+}
+
+#[derive(Debug, Deserialize)]
+struct GlobalRankRefreshQuery {
+    /// 省略或 `all` 表示全部已启用的数据源
+    source: Option<String>,
 }
 
 async fn refresh_global_rank(
     State(state): State<MediaApiState>,
-    Query(query): Query<GlobalRankQuery>,
+    Query(query): Query<GlobalRankRefreshQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let source = parse_rank_source(&query.source)?;
-    let refreshing = state.service.spawn_global_rank_refresh(source);
-    Ok(Json(serde_json::json!({ "refreshing": refreshing })))
+    let source = match query.source.as_deref().map(str::trim) {
+        None | Some("") | Some("all") => None,
+        Some(value) => Some(parse_rank_source(value)?),
+    };
+    let sources = state.service.request_rank_refresh(source).await;
+    let refreshing = sources.iter().any(|status| status.refreshing);
+    Ok(Json(
+        serde_json::json!({ "refreshing": refreshing, "sources": sources }),
+    ))
+}
+
+async fn get_global_rank_settings(State(state): State<MediaApiState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "settings": state.service.rank_settings().await,
+        "options": crate::media::global_rank::RankSettingsOptions::build(),
+    }))
+}
+
+async fn update_global_rank_settings(
+    State(state): State<MediaApiState>,
+    Json(settings): Json<crate::media::global_rank::RankSettings>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let settings = state
+        .service
+        .update_rank_settings(settings)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(serde_json::json!({
+        "settings": settings,
+        "options": crate::media::global_rank::RankSettingsOptions::build(),
+    })))
+}
+
+async fn get_global_rank_history(
+    State(state): State<MediaApiState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let records = state
+        .service
+        .rank_subscribe_history()
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(serde_json::json!({ "records": records })))
+}
+
+async fn clear_global_rank_history(
+    State(state): State<MediaApiState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .service
+        .clear_rank_subscribe_history()
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(serde_json::json!({ "records": [] })))
+}
+
+#[derive(Debug, Deserialize)]
+struct RankPosterQuery {
+    u: String,
+}
+
+/// 榜单海报代理：浏览器直连图床失败时由服务端代取，只放行榜单用到的图床。
+async fn get_global_rank_poster(
+    State(state): State<MediaApiState>,
+    Query(query): Query<RankPosterQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if query.u.len() > 600 || !crate::media::global_rank::poster_url_allowed(&query.u) {
+        return Err(ApiError::bad_request("unsupported poster url"));
+    }
+    let data_url = state
+        .service
+        .rank_poster(&query.u)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(serde_json::json!({ "data_url": data_url })))
 }
 
 /// 在后台刷新全部猫眼榜单，立即返回；刷新期间读取接口仍返回旧数据。

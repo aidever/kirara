@@ -25,6 +25,9 @@ pub struct ReleaseInfo {
     pub revision: Option<String>,
     pub release_group: Option<String>,
     pub matched_rule: String,
+    /// 整季资源标注的总集数（如「全30集」），未标注时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_episodes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Error)]
@@ -47,7 +50,7 @@ pub struct ReleaseParser {
 impl Default for ReleaseParser {
     fn default() -> Self {
         Self {
-            max_episode_range: 50,
+            max_episode_range: 300,
             latest_year: (Utc::now().year() + 1) as u32,
         }
     }
@@ -103,6 +106,11 @@ impl ReleaseParser {
             episodes = parsed.episodes;
             title = title_before(raw_title, parsed.marker_start);
             matched_rule = "x_episode";
+        } else if let Some(parsed) = self.parse_bare_episode(raw_title)? {
+            season = parsed.season;
+            episodes = parsed.episodes;
+            title = title_before(raw_title, parsed.marker_start);
+            matched_rule = "bare_episode";
         } else if let Some(parsed) = self.parse_chinese_episode(raw_title)? {
             season = parsed.season;
             episodes = parsed.episodes;
@@ -146,11 +154,32 @@ impl ReleaseParser {
         } else {
             title
         };
+        let mut alternate_titles = Vec::new();
+        let title = if matches!(
+            matched_rule,
+            "standard_episode" | "x_episode" | "bare_episode" | "chinese_episode" | "season_pack"
+        ) {
+            // 剧集常写成「Show 2026 S01E01」，年份不属于剧名。
+            match self.strip_trailing_year(&title) {
+                Some(stripped) => {
+                    alternate_titles.push(title);
+                    stripped
+                }
+                None => title,
+            }
+        } else {
+            title
+        };
+        let total_episodes = if full_season {
+            parse_total_episodes(raw_title)
+        } else {
+            None
+        };
 
         Ok(ReleaseInfo {
             raw_title: raw_title.to_owned(),
             title,
-            alternate_titles: Vec::new(),
+            alternate_titles,
             year,
             season,
             episodes,
@@ -164,7 +193,129 @@ impl ReleaseParser {
             revision,
             release_group,
             matched_rule: matched_rule.to_owned(),
+            total_episodes,
         })
+    }
+
+    /// 解析种子标题，并在标题缺少集数时参考副标题。
+    ///
+    /// 国内 PT 站常把集数只写在副标题里，例如标题「Show 2026 S01 2160p WEB-DL」配副标题
+    /// 「第1-8集」「更新至第8集」「全30集」。标题本身写明的集数始终优先。
+    pub fn parse_with_subtitle(
+        &self,
+        raw_title: &str,
+        subtitle: Option<&str>,
+    ) -> Result<ReleaseInfo, ReleaseParseError> {
+        let mut release = self.parse(raw_title)?;
+        let Some(subtitle) = subtitle.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(release);
+        };
+        if !release.episodes.is_empty() || !release.absolute_episodes.is_empty() {
+            return Ok(release);
+        }
+        let episode_like = matches!(
+            release.matched_rule.as_str(),
+            "season_pack" | "movie" | "quality_only" | "unknown"
+        );
+        if !episode_like {
+            return Ok(release);
+        }
+        let subtitle_season = chinese_season_regex()
+            .captures(subtitle)
+            .and_then(|captures| parse_chinese_number(&captures["number"]));
+        let explicit = match self.parse_chinese_episode(subtitle) {
+            Ok(Some(parsed)) => Some(parsed.episodes),
+            _ => self.parse_updated_to(subtitle),
+        };
+        if let Some(episodes) = explicit {
+            if release.matched_rule != "season_pack" {
+                strip_movie_year(&mut release);
+            }
+            release.season = release.season.or(subtitle_season);
+            release.episodes = episodes;
+            release.full_season = false;
+            release.total_episodes = None;
+            release.matched_rule = "subtitle_episode".to_owned();
+            return Ok(release);
+        }
+        if let Some(total) = parse_total_episodes(subtitle) {
+            if release.matched_rule != "season_pack" && subtitle_season.is_none() {
+                // 没有季标记也没有「第X季」，单凭「全X集」无法区分剧集与电影合集。
+                if release.matched_rule == "movie" {
+                    return Ok(release);
+                }
+            }
+            if release.matched_rule != "season_pack" {
+                strip_movie_year(&mut release);
+                release.matched_rule = "subtitle_season_pack".to_owned();
+            }
+            release.season = release.season.or(subtitle_season);
+            release.full_season = true;
+            release.total_episodes = Some(total);
+        } else if release.full_season {
+            release.total_episodes = release.total_episodes.or(parse_total_episodes(subtitle));
+        }
+        Ok(release)
+    }
+
+    /// 「EP01」「E05」「EP01-EP10」「Episode 5」这类没有季号的写法。
+    fn parse_bare_episode(&self, title: &str) -> Result<Option<ChineseEpisode>, ReleaseParseError> {
+        for captures in bare_episode_regex().captures_iter(title) {
+            let start_match = captures.name("start").expect("start capture");
+            let marker = captures.name("marker").expect("marker capture");
+            // 单字母「E」需要两位数字，避免把「E3」之类的片名当成集数。
+            // 单字母「E」必须紧贴两到三位数字（E05），避免把「E3」「WALL·E 2008」当成集数。
+            if marker.as_str().eq_ignore_ascii_case("e")
+                && (marker.end() != start_match.start()
+                    || !(2..=3).contains(&start_match.as_str().len()))
+            {
+                continue;
+            }
+            if clean_title(&title[..marker.start()]).is_empty() {
+                continue;
+            }
+            let start = capture_number(&captures, "start");
+            let episodes = match captures.name("end") {
+                Some(end) => self.expand_range(start, end.as_str().parse().expect("digits"))?,
+                None => vec![start],
+            };
+            let season = chinese_season_regex()
+                .captures(title)
+                .and_then(|captures| parse_chinese_number(&captures["number"]))
+                .or_else(|| {
+                    english_season_regex()
+                        .captures(title)
+                        .map(|captures| capture_number(&captures, "season"))
+                });
+            return Ok(Some(ChineseEpisode {
+                season,
+                episodes,
+                marker_start: marker.start(),
+            }));
+        }
+        Ok(None)
+    }
+
+    /// 「更新至第8集」「更至08集」：连载中的合集，视为第 1 集到该集。
+    fn parse_updated_to(&self, text: &str) -> Option<Vec<u32>> {
+        let captures = updated_to_regex().captures(text)?;
+        let end = parse_chinese_number(&captures["number"])?;
+        if end == 0 {
+            return None;
+        }
+        self.expand_range(1, end).ok()
+    }
+
+    fn strip_trailing_year(&self, title: &str) -> Option<String> {
+        let (head, last) = title.rsplit_once(' ')?;
+        let year: u32 = last.parse().ok().filter(|_| last.len() == 4)?;
+        if !self.is_plausible_year(year) {
+            return None;
+        }
+        let head =
+            head.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '(' | '['));
+        let head = head.trim();
+        (!head.is_empty()).then(|| head.to_owned())
     }
 
     fn parse_s_episode(&self, title: &str) -> Result<Option<NumberedEpisode>, ReleaseParseError> {
@@ -254,6 +405,20 @@ impl ReleaseParser {
             return Ok(Some(ChineseEpisode {
                 season,
                 episodes: self.expand_range(start, end)?,
+                marker_start,
+            }));
+        }
+
+        if let Some(captures) = updated_to_regex().captures(title)
+            && let Some(episodes) = self.parse_updated_to(title)
+        {
+            let marker_start = season_capture
+                .as_ref()
+                .map(|capture| capture.get(0).expect("whole capture").start())
+                .unwrap_or_else(|| captures.get(0).expect("whole capture").start());
+            return Ok(Some(ChineseEpisode {
+                season,
+                episodes,
                 marker_start,
             }));
         }
@@ -391,12 +556,46 @@ fn parse_season_pack(title: &str) -> Option<SeasonPack> {
             marker_start: captures.get(0).expect("whole capture").start(),
         });
     }
-    chinese_season_regex().captures(title).and_then(|captures| {
+    if let Some(pack) = chinese_season_regex().captures(title).and_then(|captures| {
         Some(SeasonPack {
             season: parse_chinese_number(&captures["number"])?,
             marker_start: captures.get(0).expect("whole capture").start(),
         })
+    }) {
+        return Some(pack);
+    }
+    // 「Show 全30集」「Show 全集」没有季号时按第一季整季处理。
+    complete_episodes_regex().find(title).and_then(|found| {
+        (!clean_title(&title[..found.start()]).is_empty()).then_some(SeasonPack {
+            season: 1,
+            marker_start: found.start(),
+        })
     })
+}
+
+fn parse_total_episodes(text: &str) -> Option<u32> {
+    if let Some(captures) = total_episodes_regex().captures(text) {
+        return parse_chinese_number(&captures["number"]).filter(|total| *total > 0);
+    }
+    english_total_regex()
+        .captures(text)
+        .and_then(|captures| captures["number"].parse().ok())
+        .filter(|total| *total > 0)
+}
+
+/// 副标题证明这是剧集后，把误当成电影年份的数字从片名里去掉。
+fn strip_movie_year(release: &mut ReleaseInfo) {
+    if let Some(year) = release.year {
+        let suffix = format!(" {year}");
+        if let Some(stripped) = release.title.strip_suffix(&suffix)
+            && !stripped.trim().is_empty()
+        {
+            let stripped = stripped.trim().to_owned();
+            release
+                .alternate_titles
+                .push(std::mem::replace(&mut release.title, stripped));
+        }
+    }
 }
 
 fn capture_number(captures: &Captures<'_>, name: &str) -> u32 {
@@ -693,17 +892,37 @@ macro_rules! regex_fn {
 
 regex_fn!(
     s_range_regex,
-    r"(?i)(?:^|[^a-z0-9])s(?P<season>\d{1,2})[ ._-]*e(?P<start>\d{1,4})[ ._]*(?:-|~|to)[ ._]*(?:e)?(?P<end>\d{1,4})(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
+    r"(?i)(?:^|[^a-z0-9])s(?P<season>\d{1,2})[ ._-]*(?:episode|ep?)[ ._]?(?P<start>\d{1,4})[ ._]*(?:-|~|to)[ ._]*(?:s\d{1,2}[ ._-]*)?(?:(?:episode|ep?)[ ._]?)?(?P<end>\d{1,4})(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
 );
 regex_fn!(
     s_multi_regex,
-    r"(?i)(?:^|[^a-z0-9])s(?P<season>\d{1,2})[ ._-]*e(?P<start>\d{1,4})(?P<rest>(?:[ ._+&-]*e\d{1,4})+)(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
+    r"(?i)(?:^|[^a-z0-9])s(?P<season>\d{1,2})[ ._-]*(?:episode|ep?)[ ._]?(?P<start>\d{1,4})(?P<rest>(?:[ ._+&-]*ep?\d{1,4})+)(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
 );
 regex_fn!(
     s_single_regex,
-    r"(?i)(?:^|[^a-z0-9])s(?P<season>\d{1,2})[ ._-]*e(?P<start>\d{1,4})(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
+    r"(?i)(?:^|[^a-z0-9])s(?P<season>\d{1,2})[ ._-]*(?:episode|ep?)[ ._]?(?P<start>\d{1,4})(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
 );
-regex_fn!(e_number_regex, r"(?i)e(\d{1,4})");
+regex_fn!(e_number_regex, r"(?i)ep?(\d{1,4})");
+regex_fn!(
+    bare_episode_regex,
+    r"(?i)(?:^|[^a-z0-9])(?P<marker>episode|ep|e)[ ._]?(?P<start>\d{1,4})(?:[ ._]*(?:-|~|to)[ ._]*(?:(?:episode|ep|e)[ ._]?)?(?P<end>\d{1,4}))?(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
+);
+regex_fn!(
+    updated_to_regex,
+    r"更新?\s*(?:至|到)\s*第?\s*(?P<number>[0-9零〇一二两三四五六七八九十百千]+)\s*[集话期]?"
+);
+regex_fn!(
+    total_episodes_regex,
+    r"全\s*(?P<number>[0-9零〇一二两三四五六七八九十百千]+)\s*[集话期]"
+);
+regex_fn!(
+    english_total_regex,
+    r"(?i)(?:^|[^a-z0-9])(?P<number>\d{1,4})[ ._-]*episodes(?:[^a-z0-9]|$)"
+);
+regex_fn!(
+    complete_episodes_regex,
+    r"全\s*[0-9零〇一二两三四五六七八九十百千]*\s*[集话]"
+);
 regex_fn!(
     x_range_regex,
     r"(?i)(?:^|[^a-z0-9])(?P<season>\d{1,2})x(?P<start>\d{2,4})[ ._]*(?:-|~|to)[ ._]*(?P<end>\d{2,4})(?:v[2-9]\d*)?(?:[^a-z0-9]|$)"
@@ -1066,5 +1285,127 @@ mod tests {
 
         let titled = parser().parse("The.Web.S01E01.1080p.HDTV.x264").unwrap();
         assert_eq!(titled.source.as_deref(), Some("HDTV"));
+    }
+
+    #[test]
+    fn parses_common_pt_episode_spellings() {
+        let cases: &[(&str, Option<u32>, &[u32])] = &[
+            (
+                "The Silent Storm 2026 S01 E09-10 2160p Youku WEB-DL HFR H265 AAC-Momoda",
+                Some(1),
+                &[9, 10],
+            ),
+            (
+                "The Silent Storm 2026 S01 E01-08 2160p Youku WEB-DL HFR H265 AAC-Momoda",
+                Some(1),
+                &[1, 2, 3, 4, 5, 6, 7, 8],
+            ),
+            (
+                "Gu Yu Jie Hou Xiang S01E05 1080p TX WEB-DL AAC2.0 H.264-MWeb",
+                Some(1),
+                &[5],
+            ),
+            ("Show.S01E01-E03.2160p.WEB-DL", Some(1), &[1, 2, 3]),
+            ("Show S01EP01-EP03 2160p WEB-DL", Some(1), &[1, 2, 3]),
+            ("Show S01E01-S01E03 1080p WEB-DL", Some(1), &[1, 2, 3]),
+            ("Show S02 Ep05 1080p WEB-DL", Some(2), &[5]),
+            ("Show.S01.E07.1080p.WEB-DL", Some(1), &[7]),
+            ("Show EP01-EP04 2160p WEB-DL", None, &[1, 2, 3, 4]),
+            ("Show E05 2160p WEB-DL", None, &[5]),
+            ("Show Ep.12 1080p WEB-DL", None, &[12]),
+            ("Show 第2季 第05集 1080p", Some(2), &[5]),
+            (
+                "Show 更新至第8集 2160p WEB-DL",
+                None,
+                &[1, 2, 3, 4, 5, 6, 7, 8],
+            ),
+        ];
+        for (title, season, episodes) in cases {
+            let release = parser().parse(title).unwrap();
+            assert_eq!(release.season, *season, "{title}");
+            assert_eq!(release.episodes, episodes.to_vec(), "{title}");
+            assert!(!release.full_season, "{title}");
+        }
+    }
+
+    #[test]
+    fn episode_titles_drop_the_release_year() {
+        let release = parser()
+            .parse("The Silent Storm 2026 S01 E09-10 2160p Youku WEB-DL HFR H265 AAC-Momoda")
+            .unwrap();
+        assert_eq!(release.title, "The Silent Storm");
+        assert_eq!(release.year, Some(2026));
+        assert_eq!(release.alternate_titles, vec!["The Silent Storm 2026"]);
+        assert_eq!(release.release_group.as_deref(), Some("Momoda"));
+
+        let numeric = parser().parse("1923 S02E01 2160p WEB-DL").unwrap();
+        assert_eq!(numeric.title, "1923");
+    }
+
+    #[test]
+    fn single_letter_e_needs_attached_digits() {
+        let movie = parser().parse("WALL·E 2008 1080p BluRay x264").unwrap();
+        assert!(movie.episodes.is_empty());
+        assert_eq!(movie.year, Some(2008));
+
+        let codec = parser()
+            .parse("Movie 2020 1080p WEB-DL E-AC3 H264")
+            .unwrap();
+        assert!(codec.episodes.is_empty());
+    }
+
+    #[test]
+    fn complete_markers_record_total_episodes() {
+        let release = parser().parse("庆余年 全46集 2160p WEB-DL").unwrap();
+        assert!(release.full_season);
+        assert_eq!(release.total_episodes, Some(46));
+        assert_eq!(release.title, "庆余年");
+
+        let english = parser().parse("Show S01 Complete 2160p WEB-DL").unwrap();
+        assert!(english.full_season);
+        assert_eq!(english.total_episodes, None);
+    }
+
+    #[test]
+    fn subtitles_fill_in_missing_episode_numbers() {
+        let in_progress = parser()
+            .parse_with_subtitle(
+                "Show 2026 S01 2160p WEB-DL H265-GROUP",
+                Some("谷雨 | 第1-8集 | 国语"),
+            )
+            .unwrap();
+        assert_eq!(in_progress.season, Some(1));
+        assert_eq!(in_progress.episodes, (1..=8).collect::<Vec<_>>());
+        assert!(!in_progress.full_season);
+        assert_eq!(in_progress.title, "Show");
+
+        let updated = parser()
+            .parse_with_subtitle("Show 2026 S01 2160p WEB-DL", Some("更新至第12集"))
+            .unwrap();
+        assert_eq!(updated.episodes.len(), 12);
+
+        let complete = parser()
+            .parse_with_subtitle("Show 2026 S01 2160p WEB-DL", Some("全30集 | 国语中字"))
+            .unwrap();
+        assert!(complete.full_season);
+        assert_eq!(complete.total_episodes, Some(30));
+
+        let no_season_marker = parser()
+            .parse_with_subtitle("Show 2026 2160p WEB-DL H265-GROUP", Some("谷雨 第9-10集"))
+            .unwrap();
+        assert_eq!(no_season_marker.episodes, vec![9, 10]);
+        assert_eq!(no_season_marker.title, "Show");
+        assert_eq!(no_season_marker.matched_rule, "subtitle_episode");
+
+        let explicit_title_wins = parser()
+            .parse_with_subtitle("Show S01E05 2160p WEB-DL", Some("第1-8集"))
+            .unwrap();
+        assert_eq!(explicit_title_wins.episodes, vec![5]);
+
+        let movie = parser()
+            .parse_with_subtitle("Movie 2024 2160p WEB-DL", Some("全3集 合集"))
+            .unwrap();
+        assert_eq!(movie.matched_rule, "movie");
+        assert!(!movie.full_season);
     }
 }

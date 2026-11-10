@@ -72,7 +72,7 @@ import {
   type LocalReleaseScopeKind,
 } from "@/lib/media-release-scope";
 import { cn } from "@/lib/utils";
-import { GlobalRankSource } from "@/components/media/global-rank";
+import { GlobalRankBoard, loadDoubanPoster, type RankDetailTarget } from "@/components/media/global-rank";
 import { FilterChips, FilterSummary, Highlight, SearchBox, SortableHead } from "@/components/list-controls";
 import { compareValues, matchesQuery, oneOf, usePageState, useSortState } from "@/lib/page-state";
 
@@ -2304,6 +2304,9 @@ export function MediaPage() {
         />
       ) : mode === "charts" ? (
         <GlobalRankSection
+          profiles={profiles}
+          downloaders={downloaders}
+          sites={sites}
           onSubscribe={(media) => void openSubscriptionDialog(media)}
           onSearchTitle={(title, type) => {
             // 未匹配到 TMDB 的条目转到“添加影视”手动搜索。
@@ -4290,44 +4293,7 @@ function TmdbPanel({
   );
 }
 
-type MaoyanChart = "movie" | "web_movie" | "tv" | "web_series" | "variety" | "total" | "year" | "global";
-type MaoyanPlatform = "all" | "tencent" | "iqiyi" | "youku" | "mango";
-type MaoyanRankItem = {
-  rank: number;
-  title: string;
-  release_info: string | null;
-  platform: string | null;
-  metric: string | null;
-  douban?: DoubanSubject | null;
-  tmdb: TmdbMedia | null;
-};
-type DoubanSubject = {
-  id: string;
-  title: string;
-  year: number | null;
-  rating: number | null;
-  poster_id: string | null;
-  url: string;
-  media_type: MediaType;
-};
-
-// 豆瓣图片有防盗链，由后端代取；同一张海报在会话内只请求一次。
-const doubanPosterCache = new Map<string, Promise<string | null>>();
-function loadDoubanPoster(id: string) {
-  let pending = doubanPosterCache.get(id);
-  if (!pending) {
-    pending = api<{ data_url: string }>(`/api/media/douban/poster?id=${encodeURIComponent(id)}`)
-      .then((payload) => payload.data_url)
-      .catch(() => {
-        doubanPosterCache.delete(id);
-        return null;
-      });
-    doubanPosterCache.set(id, pending);
-  }
-  return pending;
-}
-
-function RankPoster({ item }: { item: MaoyanRankItem }) {
+function RankDetailPoster({ item }: { item: RankDetailTarget }) {
   const tmdbPoster = item.tmdb?.poster_path ?? null;
   const doubanId = tmdbPoster ? null : item.douban?.poster_id ?? null;
   const [doubanUrl, setDoubanUrl] = useState<string | null>(null);
@@ -4343,41 +4309,6 @@ function RankPoster({ item }: { item: MaoyanRankItem }) {
     };
   }, [doubanId]);
   return <Poster path={tmdbPoster ?? doubanUrl} title={item.title} />;
-}
-type MaoyanRankResponse = {
-  chart: MaoyanChart;
-  show_date: string | null;
-  fetched_at: string | null;
-  items: MaoyanRankItem[];
-  refreshing: boolean;
-  error: string | null;
-};
-
-const MAOYAN_CHARTS: { value: MaoyanChart; label: string; type: MediaType }[] = [
-  { value: "movie", label: "实时票房", type: "movie" },
-  { value: "tv", label: "电视剧", type: "tv" },
-  { value: "web_series", label: "网剧", type: "tv" },
-  { value: "variety", label: "综艺", type: "tv" },
-  { value: "web_movie", label: "网络电影", type: "movie" },
-  { value: "year", label: "年度票房", type: "movie" },
-  { value: "total", label: "影史票房", type: "movie" },
-  { value: "global", label: "全球票房", type: "movie" },
-];
-const MAOYAN_PLATFORM_CHARTS: MaoyanChart[] = ["tv", "web_series", "variety"];
-const MAOYAN_PLATFORMS: { value: MaoyanPlatform; label: string }[] = [
-  { value: "all", label: "全网" },
-  { value: "tencent", label: "腾讯视频" },
-  { value: "iqiyi", label: "爱奇艺" },
-  { value: "youku", label: "优酷" },
-  { value: "mango", label: "芒果TV" },
-];
-const MAOYAN_POLL_MS = 3000;
-
-function formatFetchedAt(value: string | null | undefined) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 type DoubanInfo = {
@@ -4430,15 +4361,13 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
 }
 
 /** 榜单条目详情：豆瓣与 TMDB 各自独立加载，任一失败都不影响另一方的展示。 */
-function MaoyanDetailDialog({
+function RankDetailDialog({
   item,
-  mediaType,
   onClose,
   onSubscribe,
   onSearchTitle,
 }: {
-  item: MaoyanRankItem | null;
-  mediaType: MediaType;
+  item: RankDetailTarget | null;
   onClose: () => void;
   onSubscribe: (media: TmdbMedia) => void;
   onSearchTitle: (title: string, type: MediaType) => void;
@@ -4449,6 +4378,7 @@ function MaoyanDetailDialog({
   const [tmdb, setTmdb] = useState<TmdbDetails | null>(null);
   const [tmdbError, setTmdbError] = useState("");
   const [tmdbLoading, setTmdbLoading] = useState(false);
+  const mediaType = item?.mediaType ?? "movie";
   const doubanId = item?.douban?.id ?? null;
   const doubanType = item?.douban?.media_type ?? mediaType;
   const tmdbId = item?.tmdb?.tmdb_id ?? null;
@@ -4499,7 +4429,7 @@ function MaoyanDetailDialog({
       open={item !== null}
       onClose={onClose}
       title={item?.title ?? "详情"}
-      description={[item?.platform, item?.release_info, item?.metric].filter(Boolean).join(" · ") || undefined}
+      description={item?.description || undefined}
       panelClassName="max-w-2xl"
       footer={item ? (
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -4520,7 +4450,7 @@ function MaoyanDetailDialog({
       {item ? (
         <div className="flex flex-col gap-4 p-4 sm:p-6">
           <div className="flex gap-4">
-            <div className="w-28 shrink-0"><RankPoster item={item} /></div>
+            <div className="w-28 shrink-0"><RankDetailPoster item={item} /></div>
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               {douban?.original_title || media?.original_title ? (
                 <p className="text-sm text-muted">{douban?.original_title || media?.original_title}</p>
@@ -4569,230 +4499,38 @@ function MaoyanDetailDialog({
   );
 }
 
-const GLOBAL_RANK_SOURCES = [
-  { value: "maoyan", label: "猫眼" },
-  { value: "netflix", label: "Netflix" },
-  { value: "hongguo", label: "红果短剧" },
-  { value: "music", label: "音乐" },
-] as const;
-type GlobalRankTab = (typeof GLOBAL_RANK_SOURCES)[number]["value"];
-
-/** 全球榜单：复刻 MoviePilot 插件 GlobalRankPro，猫眼 / Netflix 可订阅，红果短剧与音乐榜只供浏览。 */
+/** 全球榜单：数据源总览、各来源榜单、榜单设置与自动订阅记录；条目详情在这里统一打开。 */
 function GlobalRankSection({
+  profiles,
+  downloaders,
+  sites,
   onSubscribe,
   onSearchTitle,
 }: {
+  profiles: QualityProfile[];
+  downloaders: Downloader[];
+  sites: Site[];
   onSubscribe: (media: TmdbMedia) => void;
   onSearchTitle: (title: string, type: MediaType) => void;
 }) {
-  const [source, setSource] = usePageState<GlobalRankTab>(
-    "media:global-rank:source",
-    "maoyan",
-    oneOf(GLOBAL_RANK_SOURCES.map((item) => item.value)),
-  );
+  const [detail, setDetail] = useState<RankDetailTarget | null>(null);
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-1 rounded-xl border border-border bg-surface-container/40 p-1" role="tablist" aria-label="榜单来源">
-        {GLOBAL_RANK_SOURCES.map((item) => (
-          <button
-            key={item.value}
-            type="button"
-            role="tab"
-            aria-selected={source === item.value}
-            onClick={() => setSource(item.value)}
-            className={cn(
-              "min-h-9 flex-1 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:flex-none",
-              source === item.value ? "bg-card text-foreground shadow-sm" : "text-muted hover:text-foreground",
-            )}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-      {source === "maoyan" ? (
-        <MaoyanRankSection onSubscribe={onSubscribe} onSearchTitle={onSearchTitle} />
-      ) : (
-        <GlobalRankSource key={source} source={source} onSubscribe={onSubscribe} onSearchTitle={onSearchTitle} />
-      )}
-    </div>
-  );
-}
-
-function MaoyanRankSection({
-  onSubscribe,
-  onSearchTitle,
-}: {
-  onSubscribe: (media: TmdbMedia) => void;
-  onSearchTitle: (title: string, type: MediaType) => void;
-}) {
-  const [chart, setChart] = usePageState<MaoyanChart>("media:maoyan:chart", "movie", (value): value is MaoyanChart => MAOYAN_CHARTS.some((item) => item.value === value));
-  const [platform, setPlatform] = usePageState<MaoyanPlatform>("media:maoyan:platform", "all", (value): value is MaoyanPlatform => MAOYAN_PLATFORMS.some((item) => item.value === value));
-  const [data, setData] = useState<MaoyanRankResponse | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [requesting, setRequesting] = useState(false);
-  const [detailItem, setDetailItem] = useState<MaoyanRankItem | null>(null);
-  const generation = useRef(0);
-  const chartMeta = MAOYAN_CHARTS.find((item) => item.value === chart) ?? MAOYAN_CHARTS[0];
-  // 票房榜不分平台；网络电影只有腾讯视频的月度分账数据。
-  const usesPlatform = MAOYAN_PLATFORM_CHARTS.includes(chart);
-  const query = `chart=${chart}&platform=${usesPlatform ? platform : "all"}&limit=20`;
-
-  // 读取接口只返回后台快照，不会等待抓取；切换榜单时清空，避免误显示上一个榜单。
-  const load = useCallback(async (silent = false) => {
-    const current = ++generation.current;
-    if (!silent) setLoading(true);
-    try {
-      const payload = await api<MaoyanRankResponse>(`/api/media/maoyan?${query}`);
-      if (current !== generation.current) return;
-      setData(payload);
-      setError("");
-    } catch (loadError) {
-      if (current === generation.current) setError(describeUnknown(loadError));
-    } finally {
-      if (current === generation.current) setLoading(false);
-    }
-  }, [query]);
-
-  useEffect(() => {
-    setData(null);
-    setError("");
-    void load();
-  }, [load]);
-
-  // 后台刷新期间轮询，刷新完成后自动换成新数据；旧数据在此期间照常展示。
-  const refreshing = Boolean(data?.refreshing);
-  useEffect(() => {
-    if (!refreshing) return;
-    const timer = window.setInterval(() => void load(true), MAOYAN_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [refreshing, load]);
-
-  const refresh = async () => {
-    setRequesting(true);
-    try {
-      await api<{ refreshing: boolean }>("/api/media/maoyan/refresh", { method: "POST" });
-      await load(true);
-    } catch (refreshError) {
-      setError(describeUnknown(refreshError));
-    } finally {
-      setRequesting(false);
-    }
-  };
-
-  const hasItems = Boolean(data && data.items.length > 0);
-  const fetchedAt = formatFetchedAt(data?.fetched_at);
-  const busy = refreshing || requesting;
-
-  return (
-    <section aria-label="猫眼榜单" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold">猫眼榜单</h3>
-          <p className="text-xs text-muted">
-            看看大家在看什么，点“订阅”即可追更。
-            {data?.show_date
-              ? chart === "web_movie"
-                ? ` 腾讯视频 ${data.show_date.replace(/(\d{4})(\d{2})\d{2}/, "$1-$2")} 月分账榜`
-                : chart === "year" || chart === "global"
-                  ? ` ${data.show_date.slice(0, 4)} 年度${chart === "global" ? " · 数据来自 Box Office Mojo" : ""}`
-                  : chart === "total"
-                    ? " 中国内地影史累计票房"
-                    : ` 数据日期 ${data.show_date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}`
-              : ""}
-            {fetchedAt ? ` · 更新于 ${fetchedAt}` : ""}
-          </p>
-        </div>
-        <Button variant="outline" className="h-8 px-3" disabled={busy} onClick={() => void refresh()}>
-          <RefreshCw className={cn(busy && "animate-spin")} data-icon="inline-start" />{busy ? "后台刷新中" : "刷新"}
-        </Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="榜单类型">
-        {MAOYAN_CHARTS.map((item) => (
-          <button
-            key={item.value}
-            type="button"
-            role="tab"
-            aria-selected={chart === item.value}
-            className={cn(
-              "h-8 cursor-pointer rounded-full border px-3 text-xs font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-              chart === item.value ? "border-primary/30 bg-primary/10 text-foreground" : "border-border text-muted hover:bg-accent hover:text-foreground",
-            )}
-            onClick={() => setChart(item.value)}
-          >
-            {item.label}
-          </button>
-        ))}
-        {usesPlatform ? (
-          <div className="ml-auto w-36">
-            <Select aria-label="平台" value={platform} onChange={(value) => setPlatform(value as MaoyanPlatform)} options={MAOYAN_PLATFORMS} />
-          </div>
-        ) : null}
-      </div>
-      {hasItems && data?.error && !refreshing ? (
-        <p role="status" className="text-xs text-muted">最近一次刷新失败，当前显示的是上次的数据：{data.error}</p>
-      ) : null}
-      {hasItems && data ? (
-        <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {data.items.map((item) => (
-            <li key={`${item.rank}:${item.title}`} className="flex gap-3 rounded-xl border border-border bg-card p-3">
-              <button type="button" aria-label={`查看「${item.title}」详情`} className="relative w-16 shrink-0 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={() => setDetailItem(item)}>
-                <RankPoster item={item} />
-                <span className="absolute left-1 top-1 rounded-md bg-background/90 px-1.5 text-xs font-semibold tabular-nums">{item.rank}</span>
-              </button>
-              <div className="flex min-w-0 flex-1 flex-col">
-                <h4 className="line-clamp-2 text-sm font-semibold">
-                  <button type="button" className="cursor-pointer text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={() => setDetailItem(item)}>{item.title}</button>
-                </h4>
-                <p className="mt-1 truncate text-xs text-muted">
-                  {[item.platform, item.release_info].filter(Boolean).join(" · ") || "\u00a0"}
-                </p>
-                {item.metric || item.douban ? (
-                  <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs tabular-nums text-muted">
-                    {item.metric ? <span>{item.metric}</span> : null}
-                    {item.douban ? (
-                      <a className="underline-offset-4 hover:text-foreground hover:underline" href={item.douban.url} target="_blank" rel="noreferrer">
-                        {item.douban.rating ? `豆瓣 ${item.douban.rating.toFixed(1)}` : "豆瓣暂无评分"}
-                      </a>
-                    ) : null}
-                  </p>
-                ) : null}
-                <div className="mt-auto flex items-end justify-between gap-2 pt-2">
-                  <span className="truncate text-xs text-muted">
-                    {item.tmdb ? `TMDB：${item.tmdb.title}${item.tmdb.year ? ` (${item.tmdb.year})` : ""}` : "未匹配到 TMDB"}
-                  </span>
-                  {item.tmdb ? (
-                    <Button className="h-8 shrink-0 px-3" onClick={() => onSubscribe(item.tmdb as TmdbMedia)}>
-                      <Plus data-icon="inline-start" />订阅
-                    </Button>
-                  ) : (
-                    <Button variant="outline" className="h-8 shrink-0 px-3" onClick={() => onSearchTitle(item.title, chartMeta.type)}>
-                      <Search data-icon="inline-start" />搜索
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </li>
-          ))}
-        </ol>
-      ) : loading || busy || (data === null && !error) ? (
-        <LoadingState label={busy ? "首次获取猫眼榜单，可能需要一点时间" : "正在读取猫眼榜单"} />
-      ) : error || data?.error ? (
-        <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-destructive/25 bg-destructive/5 p-4 text-sm">
-          <p>{error || data?.error}</p>
-          <Button variant="outline" className="h-8 px-3" onClick={() => void (error ? load() : refresh())}>重试</Button>
-        </div>
-      ) : (
-        <EmptyState icon={Film} title="榜单暂无数据" />
-      )}
-      <MaoyanDetailDialog
-        item={detailItem}
-        mediaType={chartMeta.type}
-        onClose={() => setDetailItem(null)}
+    <>
+      <GlobalRankBoard
+        profiles={profiles}
+        downloaders={downloaders}
+        sites={sites}
+        onSubscribe={(media) => onSubscribe(media as TmdbMedia)}
+        onSearchTitle={onSearchTitle}
+        onOpenDetail={setDetail}
+      />
+      <RankDetailDialog
+        item={detail}
+        onClose={() => setDetail(null)}
         onSubscribe={onSubscribe}
         onSearchTitle={onSearchTitle}
       />
-    </section>
+    </>
   );
 }
 

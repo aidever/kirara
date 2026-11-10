@@ -357,6 +357,13 @@ fn parse_search_results(
             source_site: site_name.to_string(),
             torrent_id: torrent_id.clone(),
             title,
+            subtitle: item
+                .get("smallDescr")
+                .or_else(|| item.get("small_descr"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             // The public M-Team UI commonly uses a different origin from the API. Do not invent
             // a cross-origin detail URL that could later receive credentials.
             detail_url: None,

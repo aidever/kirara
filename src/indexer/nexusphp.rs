@@ -483,6 +483,11 @@ fn parse_api_results(
             source_site: site_name.to_string(),
             torrent_id: torrent_id.clone(),
             title,
+            subtitle: ["small_descr", "smallDescr", "subtitle", "sub_title"]
+                .iter()
+                .find_map(|key| item.get(*key).and_then(Value::as_str))
+                .map(|value| normalize_text(std::iter::once(value)))
+                .filter(|value| !value.is_empty()),
             detail_url,
             download_locator: Some(torrent_id),
             magnet: item
@@ -538,6 +543,7 @@ fn parse_html_results(
     let mut seen = HashSet::new();
     for row in rows {
         let mut selected: Option<(String, String, String)> = None;
+        let mut selected_link: Option<ElementRef<'_>> = None;
         for link in row.select(&detail_links) {
             let Some(href) = link.value().attr("href") else {
                 continue;
@@ -555,6 +561,7 @@ fn parse_html_results(
                 .to_string();
             if selected.is_none() || !title.is_empty() {
                 selected = Some((torrent_id, title, href.to_string()));
+                selected_link = Some(link);
             }
             if selected
                 .as_ref()
@@ -607,6 +614,7 @@ fn parse_html_results(
             source_site: site_name.to_string(),
             torrent_id: torrent_id.clone(),
             title,
+            subtitle: selected_link.and_then(html_subtitle),
             detail_url,
             download_locator: Some(torrent_id),
             magnet: None,
@@ -639,6 +647,28 @@ fn extract_torrent_id(raw: &str, base_url: &Url) -> Option<String> {
         .rev()
         .find(|segment| !segment.is_empty() && segment.chars().all(|ch| ch.is_ascii_digit()))
         .map(str::to_string)
+}
+
+/// NexusPHP 把副标题放在标题链接所在单元格里（通常在 `<br>` 之后）。
+fn html_subtitle(link: ElementRef<'_>) -> Option<String> {
+    let cell = link
+        .ancestors()
+        .filter_map(ElementRef::wrap)
+        .find(|element| element.value().name() == "td")?;
+    let link_text = normalize_text(link.text());
+    let cell_text = normalize_text(cell.text());
+    let rest = match cell_text.find(&link_text) {
+        Some(index) if !link_text.is_empty() => {
+            format!(
+                "{} {}",
+                &cell_text[..index],
+                &cell_text[index + link_text.len()..]
+            )
+        }
+        _ => cell_text,
+    };
+    let rest = normalize_text(std::iter::once(rest.as_str()));
+    (!rest.is_empty()).then_some(rest)
 }
 
 fn normalize_text<'a>(parts: impl Iterator<Item = &'a str>) -> String {
@@ -837,6 +867,7 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].torrent_id, "456");
         assert_eq!(results[0].title, "Series.S01E08.2160p");
+        assert_eq!(results[0].subtitle, None);
         assert_eq!(results[0].size, 1_610_612_736);
         assert_eq!(results[0].seeders, 31);
         assert_eq!(results[0].leechers, 6);
@@ -905,5 +936,24 @@ mod tests {
             ensure_nexus_success(&unrelated),
             Err(IndexerError::Api(_))
         ));
+    }
+
+    #[test]
+    fn html_rows_keep_the_subtitle_next_to_the_title_link() {
+        let html = r#"
+            <table class="torrents"><tr>
+              <td><table class="torrentname"><tr><td class="embedded">
+                <a title="Show 2026 S01 2160p WEB-DL" href="details.php?id=7"><b>Show 2026 S01 2160p WEB-DL</b></a>
+                <br/>谷雨 | 第1-8集 | 国语
+              </td></tr></table></td>
+              <td>2 GiB</td><td>3</td><td>1</td>
+            </tr></table>
+        "#;
+        let base = Url::parse("https://tracker.example").unwrap();
+        let results = parse_html_results(html, 1, "Tracker", &base).unwrap();
+        assert_eq!(
+            results[0].subtitle.as_deref(),
+            Some("谷雨 | 第1-8集 | 国语")
+        );
     }
 }

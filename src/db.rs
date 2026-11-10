@@ -24,12 +24,12 @@ mod scheduled_task;
 pub mod search;
 mod webdav;
 
+pub use media_upgrade::NewMediaGroupUpgrade;
 pub use openlist::{
     ManualMediaRelocationTarget, MediaRelocationJob, OpenListConfig, OpenListPathMapping,
     OpenListTargetDirectory,
 };
 pub use ptd_backup::PtdBackupConfig;
-pub use media_upgrade::NewMediaGroupUpgrade;
 
 #[derive(Clone)]
 pub struct Database {
@@ -2829,6 +2829,12 @@ impl Database {
                     source TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
                     fetched_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS global_rank_state (
+                    key TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS media_settings (

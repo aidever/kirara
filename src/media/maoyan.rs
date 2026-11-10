@@ -39,6 +39,8 @@ pub enum MaoyanChart {
     WebSeries,
     /// 综艺热度
     Variety,
+    /// 剧集综合热度（电视剧 + 网剧，猫眼不带 seriesType 的综合榜）
+    WebAll,
     /// 影史总票房（猫眼 rankings/year，不带年份）
     Total,
     /// 国内年度票房（猫眼 rankings/year?year=YYYY）
@@ -48,8 +50,9 @@ pub enum MaoyanChart {
 }
 
 impl MaoyanChart {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Movie,
+        Self::WebAll,
         Self::Tv,
         Self::WebSeries,
         Self::Variety,
@@ -66,6 +69,7 @@ impl MaoyanChart {
             Self::Tv => "tv",
             Self::WebSeries => "web_series",
             Self::Variety => "variety",
+            Self::WebAll => "web_all",
             Self::Total => "total",
             Self::Year => "year",
             Self::Global => "global",
@@ -89,6 +93,7 @@ impl MaoyanChart {
             "tv" => Some(Self::Tv),
             "web_series" => Some(Self::WebSeries),
             "variety" => Some(Self::Variety),
+            "web_all" | "web-all" => Some(Self::WebAll),
             "total" => Some(Self::Total),
             "year" => Some(Self::Year),
             "global" => Some(Self::Global),
@@ -98,8 +103,10 @@ impl MaoyanChart {
 
     pub fn media_type(self) -> TmdbMediaType {
         match self {
-            Self::Movie | Self::WebMovie | Self::Total | Self::Year | Self::Global => TmdbMediaType::Movie,
-            Self::Tv | Self::WebSeries | Self::Variety => TmdbMediaType::Tv,
+            Self::Movie | Self::WebMovie | Self::Total | Self::Year | Self::Global => {
+                TmdbMediaType::Movie
+            }
+            Self::Tv | Self::WebSeries | Self::Variety | Self::WebAll => TmdbMediaType::Tv,
         }
     }
 
@@ -108,12 +115,55 @@ impl MaoyanChart {
             Self::Tv => Some(0),
             Self::WebSeries => Some(1),
             Self::Variety => Some(2),
-            Self::Movie | Self::WebMovie | Self::Total | Self::Year | Self::Global => None,
+            Self::WebAll
+            | Self::Movie
+            | Self::WebMovie
+            | Self::Total
+            | Self::Year
+            | Self::Global => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Movie => "电影票房",
+            Self::WebMovie => "网络电影",
+            Self::Tv => "电视剧热度",
+            Self::WebSeries => "网剧热度",
+            Self::Variety => "综艺热度",
+            Self::WebAll => "剧集综合",
+            Self::Total => "影史总票房",
+            Self::Year => "国内年度票房",
+            Self::Global => "全球年度票房",
+        }
+    }
+
+    /// 榜单的官方页面，供界面标注数据来源。
+    pub fn page_url(self, show_date: &str) -> String {
+        let year = show_date.get(..4).unwrap_or(show_date);
+        match self {
+            Self::Movie => format!("{MAOYAN_BASE}/dashboard/movie"),
+            Self::WebMovie => format!("{MAOYAN_BASE}/dashboard/web-heat"),
+            Self::Tv | Self::WebSeries | Self::Variety | Self::WebAll => HEAT_PAGE.to_string(),
+            Self::Total => format!("{MAOYAN_BASE}/rankings/year"),
+            Self::Year => format!("{MAOYAN_BASE}/rankings/year?year={year}"),
+            Self::Global => format!("https://www.boxofficemojo.com/year/world/{year}/"),
+        }
+    }
+
+    /// 数据来源名称。
+    pub fn origin(self) -> &'static str {
+        match self {
+            Self::Global => "Box Office Mojo",
+            _ => "猫眼专业版",
         }
     }
 
     pub fn needs_browser(self) -> bool {
-        matches!(self, Self::WebMovie | Self::Tv | Self::WebSeries | Self::Variety)
+        matches!(
+            self,
+            Self::WebMovie | Self::Tv | Self::WebSeries | Self::Variety | Self::WebAll
+        )
     }
 
     /// 服务端直出 HTML 的票房榜（影史 / 年度 / 全球），直接请求页面解析。
@@ -133,7 +183,13 @@ pub enum MaoyanPlatform {
 }
 
 impl MaoyanPlatform {
-    pub const ALL: [Self; 5] = [Self::All, Self::Tencent, Self::Iqiyi, Self::Youku, Self::Mango];
+    pub const ALL: [Self; 5] = [
+        Self::All,
+        Self::Tencent,
+        Self::Iqiyi,
+        Self::Youku,
+        Self::Mango,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -156,6 +212,16 @@ impl MaoyanPlatform {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "全网",
+            Self::Tencent => "腾讯视频",
+            Self::Iqiyi => "爱奇艺",
+            Self::Youku => "优酷",
+            Self::Mango => "芒果TV",
+        }
+    }
+
     fn code(self) -> Option<u8> {
         match self {
             Self::All => None,
@@ -173,11 +239,46 @@ pub struct MaoyanRankItem {
     pub title: String,
     pub release_info: Option<String>,
     pub platform: Option<String>,
-    /// 票房或热度的展示文本，例如 "6.71亿" / "热度 8523.6"
+    /// 旧版快照里的合并指标文本；新数据使用下面的分项字段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<String>,
+    /// 实时票房（电影票房榜为当日综合票房，网络电影为当月分账，全球榜为北美票房）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_office: Option<String>,
+    /// 累计票房（影史 / 年度榜的总票房，全球榜的全球票房）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_box_office: Option<String>,
+    /// 热度值
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heat: Option<String>,
+    /// 票房占比
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_rate: Option<String>,
+    /// 排片占比
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_rate: Option<String>,
     #[serde(default)]
     pub douban: Option<DoubanSubject>,
     pub tmdb: Option<TmdbMedia>,
+}
+
+impl MaoyanRankItem {
+    fn new(rank: usize, title: String) -> Self {
+        Self {
+            rank,
+            title,
+            release_info: None,
+            platform: None,
+            metric: None,
+            box_office: None,
+            total_box_office: None,
+            heat: None,
+            box_rate: None,
+            show_rate: None,
+            douban: None,
+            tmdb: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,7 +391,12 @@ impl MaoyanStore {
         }
     }
 
-    pub async fn view(&self, chart: MaoyanChart, platform: MaoyanPlatform, limit: usize) -> MaoyanRankView {
+    pub async fn view(
+        &self,
+        chart: MaoyanChart,
+        platform: MaoyanPlatform,
+        limit: usize,
+    ) -> MaoyanRankView {
         let entry = self.entries.lock().await.get(&(chart, platform)).cloned();
         let error = self.errors.lock().await.get(&(chart, platform)).cloned();
         let refreshing = self.is_refreshing();
@@ -317,6 +423,32 @@ impl MaoyanStore {
                 error,
             },
         }
+    }
+
+    /// 全部榜单快照及各自最近一次刷新失败的原因，供全球榜单的统一视图使用。
+    pub async fn all(&self) -> Vec<(MaoyanRankResponse, Option<String>)> {
+        let entries = self.entries.lock().await;
+        let errors = self.errors.lock().await;
+        entries
+            .values()
+            .map(|entry| {
+                (
+                    entry.clone(),
+                    errors.get(&(entry.chart, entry.platform)).cloned(),
+                )
+            })
+            .collect()
+    }
+
+    /// 还没有任何数据的榜单的失败原因。
+    pub async fn pending_errors(&self) -> Vec<(MaoyanChart, MaoyanPlatform, String)> {
+        let entries = self.entries.lock().await;
+        let errors = self.errors.lock().await;
+        errors
+            .iter()
+            .filter(|(key, _)| !entries.contains_key(key))
+            .map(|((chart, platform), error)| (*chart, *platform, error.clone()))
+            .collect()
     }
 
     pub async fn put(&self, response: MaoyanRankResponse) {
@@ -367,7 +499,10 @@ impl MaoyanStore {
 
     pub async fn cached_poster(&self, id: &str) -> Option<String> {
         let posters = self.posters.lock().await;
-        posters.iter().find(|(key, _)| key == id).map(|(_, value)| value.clone())
+        posters
+            .iter()
+            .find(|(key, _)| key == id)
+            .map(|(_, value)| value.clone())
     }
 
     pub async fn store_poster(&self, id: String, data_url: String) {
@@ -379,7 +514,11 @@ impl MaoyanStore {
         posters.push_back((id, data_url));
     }
 
-    pub async fn cached_match(&self, title: &str, media_type: &TmdbMediaType) -> Option<MediaMatch> {
+    pub async fn cached_match(
+        &self,
+        title: &str,
+        media_type: &TmdbMediaType,
+    ) -> Option<MediaMatch> {
         let cache = self.match_cache.lock().await;
         cache
             .get(&(title.to_string(), media_type.as_str()))
@@ -396,7 +535,10 @@ impl MaoyanStore {
 
 pub fn show_date() -> String {
     let shanghai = FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid offset");
-    Utc::now().with_timezone(&shanghai).format("%Y%m%d").to_string()
+    Utc::now()
+        .with_timezone(&shanghai)
+        .format("%Y%m%d")
+        .to_string()
 }
 
 pub fn chart_url(chart: MaoyanChart, platform: MaoyanPlatform, show_date: &str) -> String {
@@ -413,10 +555,15 @@ pub fn chart_url(chart: MaoyanChart, platform: MaoyanPlatform, show_date: &str) 
             platform.code().unwrap_or(3)
         ),
         _ => {
-            let mut url = format!(
-                "{MAOYAN_BASE}/i/api/encrypt/dashboard/webHeatData?seriesType={}&showDate={show_date}",
-                chart.series_type().unwrap_or(0)
-            );
+            // 不带 seriesType 时猫眼返回电视剧 + 网剧的综合榜。
+            let mut url = match chart.series_type() {
+                Some(series) => format!(
+                    "{MAOYAN_BASE}/i/api/encrypt/dashboard/webHeatData?seriesType={series}&showDate={show_date}"
+                ),
+                None => format!(
+                    "{MAOYAN_BASE}/i/api/encrypt/dashboard/webHeatData?showDate={show_date}"
+                ),
+            };
             if let Some(code) = platform.code() {
                 url.push_str(&format!("&platformType={code}"));
             }
@@ -468,7 +615,10 @@ pub async fn fetch_html_chart(
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
-        .header(reqwest::header::ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+        .header(
+            reqwest::header::ACCEPT_LANGUAGE,
+            "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+        )
         .timeout(Duration::from_secs(30))
         .send()
         .await
@@ -514,7 +664,12 @@ pub fn parse_maoyan_rankings(html: &str, limit: usize) -> Vec<MaoyanRankItem> {
         if items.len() >= limit {
             break;
         }
-        let Some(title) = element.select(&first).next().map(element_text).filter(|text| !text.is_empty()) else {
+        let Some(title) = element
+            .select(&first)
+            .next()
+            .map(element_text)
+            .filter(|text| !text.is_empty())
+        else {
             continue;
         };
         let position = element
@@ -522,21 +677,20 @@ pub fn parse_maoyan_rankings(html: &str, limit: usize) -> Vec<MaoyanRankItem> {
             .next()
             .and_then(|cell| element_text(cell).parse::<usize>().ok())
             .unwrap_or(items.len() + 1);
-        let metric = element
+        let total = element
             .select(&box_office)
             .next()
             .and_then(|cell| element_text(cell).replace(',', "").parse::<f64>().ok())
             .filter(|value| *value > 0.0)
-            .map(|wan| format!("票房 {}", format_yuan(wan * 10_000.0)));
-        items.push(MaoyanRankItem {
-            rank: position,
-            title,
-            release_info: element.select(&second).next().map(element_text).filter(|text| !text.is_empty()),
-            platform: None,
-            metric,
-            douban: None,
-            tmdb: None,
-        });
+            .map(|wan| format_yuan(wan * 10_000.0));
+        let mut item = MaoyanRankItem::new(position, title);
+        item.release_info = element
+            .select(&second)
+            .next()
+            .map(element_text)
+            .filter(|text| !text.is_empty());
+        item.total_box_office = total;
+        items.push(item);
     }
     items
 }
@@ -556,7 +710,13 @@ pub fn parse_box_office_mojo(html: &str, limit: usize) -> Vec<MaoyanRankItem> {
     let document = scraper::Html::parse_document(html);
     let row = scraper::Selector::parse("tr").expect("valid selector");
     let cell = scraper::Selector::parse("td").expect("valid selector");
-    let money = |text: &str| text.replace(['$', ','], "").trim().parse::<f64>().ok().filter(|value| *value > 0.0);
+    let money = |text: &str| {
+        text.replace(['$', ','], "")
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| *value > 0.0)
+    };
     let mut items = Vec::new();
     for element in document.select(&row) {
         if items.len() >= limit {
@@ -568,22 +728,13 @@ pub fn parse_box_office_mojo(html: &str, limit: usize) -> Vec<MaoyanRankItem> {
         }
         let worldwide = money(&cells[2]);
         let domestic = cells.get(3).and_then(|value| money(value));
-        let metric = worldwide.map(|value| {
-            let mut text = format!("全球 {}", format_usd(value));
-            if let Some(domestic) = domestic {
-                text.push_str(&format!(" · 北美 {}", format_usd(domestic)));
-            }
-            text
-        });
-        items.push(MaoyanRankItem {
-            rank: cells[0].parse().unwrap_or(items.len() + 1),
-            title: cells[1].clone(),
-            release_info: None,
-            platform: None,
-            metric,
-            douban: None,
-            tmdb: None,
-        });
+        let mut item = MaoyanRankItem::new(
+            cells[0].parse().unwrap_or(items.len() + 1),
+            cells[1].clone(),
+        );
+        item.total_box_office = worldwide.map(format_usd);
+        item.box_office = domestic.map(format_usd);
+        items.push(item);
     }
     items
 }
@@ -629,9 +780,9 @@ fn text(value: Option<&Value>) -> Option<String> {
 fn is_readable_number(value: &str) -> bool {
     !value.is_empty()
         && value.chars().any(|character| character.is_ascii_digit())
-        && value
-            .chars()
-            .all(|character| character.is_ascii_digit() || matches!(character, '.' | ',' | ' ' | '万' | '亿'))
+        && value.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '.' | ',' | ' ' | '万' | '亿')
+        })
 }
 
 fn readable_text(value: Option<&Value>) -> Option<String> {
@@ -662,6 +813,25 @@ fn format_yuan(value: f64) -> String {
     } else {
         format!("{}元", value.round())
     }
+}
+
+/// `{num, unit}` 形式的金额，例如 `{"num": "70.02", "unit": "万"}`。
+fn split_unit(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    let num = text(value.get("num"))?;
+    let unit = text(value.get("unit")).unwrap_or_default();
+    Some(format!("{num}{unit}")).filter(|text| is_readable_number(text))
+}
+
+/// 百分比文本（如 "29.4%"）；被字体混淆时丢弃。
+fn percent_text(value: Option<&Value>) -> Option<String> {
+    text(value).filter(|value| {
+        value.ends_with('%')
+            && value
+                .trim_end_matches('%')
+                .parse::<f64>()
+                .is_ok_and(|number| number > 0.0)
+    })
 }
 
 /// 热度优先取数值字段（不受字体混淆影响），其次才用可读的展示文本。
@@ -707,23 +877,27 @@ pub fn parse_chart(
         let Some(title) = text(info.get(title_key)) else {
             continue;
         };
-        let metric = match chart {
-            MaoyanChart::Movie => readable_text(entry.get("sumBoxDesc"))
-                .map(|value| format!("累计 {value}")),
+        let mut item = MaoyanRankItem::new(items.len() + 1, title);
+        item.release_info = text(info.get("releaseInfo"));
+        item.platform = text(info.get("platformDesc")).or_else(|| text(entry.get("platformDesc")));
+        match chart {
+            MaoyanChart::Movie => {
+                // 数值字段单位为元，不受字体混淆影响；展示文本只在可读时使用。
+                item.box_office = number(entry.get("box"))
+                    .map(format_yuan)
+                    .or_else(|| split_unit(entry.get("boxSplitUnit")));
+                item.total_box_office = readable_text(entry.get("sumBoxDesc"));
+                item.box_rate = percent_text(entry.get("boxRate"));
+                item.show_rate = percent_text(entry.get("showCountRate"));
+            }
             // 分账展示文字被字体混淆（如 ".万"），数值字段单位为元。
-            MaoyanChart::WebMovie => number(entry.get("splitBox"))
-                .map(|value| format!("当月分账 {}", format_yuan(value))),
-            _ => heat_value(entry).map(|value| format!("热度 {value}")),
-        };
-        items.push(MaoyanRankItem {
-            rank: items.len() + 1,
-            title,
-            release_info: text(info.get("releaseInfo")),
-            platform: text(info.get("platformDesc")),
-            metric,
-            douban: None,
-            tmdb: None,
-        });
+            MaoyanChart::WebMovie => {
+                item.box_office = number(entry.get("splitBox")).map(format_yuan);
+                item.heat = heat_value(entry);
+            }
+            _ => item.heat = heat_value(entry),
+        }
+        items.push(item);
     }
     Ok(items)
 }
@@ -750,7 +924,9 @@ pub fn tmdb_query_title(title: &str) -> String {
 
 pub fn pick_tmdb_match(title: &str, results: Vec<TmdbMedia>) -> Option<TmdbMedia> {
     let wanted = normalize(&tmdb_query_title(title));
-    let exact = results.iter().position(|media| title_matches(media, &wanted));
+    let exact = results
+        .iter()
+        .position(|media| title_matches(media, &wanted));
     let index = exact.unwrap_or(0);
     results.into_iter().nth(index)
 }
@@ -803,11 +979,19 @@ pub fn pick_tmdb_for(
     year: Option<u32>,
     results: Vec<TmdbMedia>,
 ) -> Option<TmdbMedia> {
-    let wanted: Vec<String> = names.iter().map(|name| normalize(&tmdb_query_title(name))).collect();
+    let wanted: Vec<String> = names
+        .iter()
+        .map(|name| normalize(&tmdb_query_title(name)))
+        .collect();
     let exact_with_year = results.iter().position(|media| {
-        wanted.iter().any(|name| title_matches(media, name)) && (year.is_none() || year_close(media, year))
+        wanted.iter().any(|name| title_matches(media, name))
+            && (year.is_none() || year_close(media, year))
     });
-    let exact = || results.iter().position(|media| wanted.iter().any(|name| title_matches(media, name)));
+    let exact = || {
+        results
+            .iter()
+            .position(|media| wanted.iter().any(|name| title_matches(media, name)))
+    };
     let by_year = || results.iter().position(|media| year_close(media, year));
     let index = exact_with_year.or_else(exact).or_else(by_year)?;
     results.into_iter().nth(index)
@@ -839,7 +1023,13 @@ pub async fn resolve_media(
         }
     };
     let Some(tmdb) = tmdb else {
-        return (MediaMatch { douban: subject, tmdb: None }, false);
+        return (
+            MediaMatch {
+                douban: subject,
+                tmdb: None,
+            },
+            false,
+        );
     };
     fn note(
         result: Result<Option<TmdbMedia>, super::tmdb::TmdbError>,
@@ -860,7 +1050,11 @@ pub async fn resolve_media(
     if let Some(subject) = &subject {
         let base = tmdb_query_title(&subject.title);
         // 带季号的剧集在 TMDB 以首季年份收录，不能按本季年份过滤。
-        let year = if base == subject.title.trim() { subject.year } else { None };
+        let year = if base == subject.title.trim() {
+            subject.year
+        } else {
+            None
+        };
         let names = vec![subject.title.clone()];
         found = note(
             tmdb.search_typed(&base, media_type, year)
@@ -873,7 +1067,11 @@ pub async fn resolve_media(
             match douban.detail(subject).await {
                 Ok(detail) => {
                     if let Some(imdb) = detail.imdb.as_deref() {
-                        found = note(tmdb.find_by_imdb(imdb, media_type).await, &mut reliable, title);
+                        found = note(
+                            tmdb.find_by_imdb(imdb, media_type).await,
+                            &mut reliable,
+                            title,
+                        );
                     }
                     let aliases: Vec<String> = detail
                         .original_title
@@ -923,7 +1121,13 @@ pub async fn resolve_media(
         );
     }
     let reliable = reliable || found.is_some();
-    (MediaMatch { douban: subject, tmdb: found }, reliable)
+    (
+        MediaMatch {
+            douban: subject,
+            tmdb: found,
+        },
+        reliable,
+    )
 }
 
 #[cfg(test)]
@@ -934,14 +1138,18 @@ mod tests {
     #[test]
     fn parses_box_office_and_heat_payloads() {
         let movie = json!({"movieList": {"list": [
-            {"movieInfo": {"movieName": "神探之痕迹", "releaseInfo": "上映36天"}, "sumBoxDesc": "6.71亿"},
+            {"movieInfo": {"movieName": "神探之痕迹", "releaseInfo": "上映36天"}, "sumBoxDesc": "6.71亿", "box": 70024890, "boxRate": "29.4%", "showCountRate": "15.8%", "boxSplitUnit": {"num": "70.02", "unit": "万"}},
             {"movieInfo": {}},
             {"movieInfo": {"movieName": "第二部", "releaseInfo": null}}
         ]}});
         let items = parse_chart(MaoyanChart::Movie, &movie, 10).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].title, "神探之痕迹");
-        assert_eq!(items[0].metric.as_deref(), Some("累计 6.71亿"));
+        assert_eq!(items[0].total_box_office.as_deref(), Some("6.71亿"));
+        assert_eq!(items[0].box_office.as_deref(), Some("7002.5万"));
+        assert_eq!(items[0].box_rate.as_deref(), Some("29.4%"));
+        assert_eq!(items[0].show_rate.as_deref(), Some("15.8%"));
+        assert_eq!(items[1].box_office, None);
         assert_eq!(items[1].rank, 2);
 
         let heat = json!({"dataList": {"list": [
@@ -949,24 +1157,32 @@ mod tests {
         ]}});
         let items = parse_chart(MaoyanChart::Tv, &heat, 1).unwrap();
         assert_eq!(items[0].platform.as_deref(), Some("腾讯视频"));
-        assert_eq!(items[0].metric.as_deref(), Some("热度 8523.6"));
+        assert_eq!(items[0].heat.as_deref(), Some("8523.6"));
 
-        assert!(matches!(parse_chart(MaoyanChart::Tv, &json!({"status": false}), 5), Err(MaoyanError::NoData)));
+        assert!(matches!(
+            parse_chart(MaoyanChart::Tv, &json!({"status": false}), 5),
+            Err(MaoyanError::NoData)
+        ));
 
         // 真实返回：currHeat 为混淆后的 "."，热度在 barValue；网络电影分账在 splitBox（万元）。
         let tv = json!({"status": true, "dataList": {"list": [
             {"barValue": 6517.03, "currHeat": ".", "currHeatDesc": ".", "seriesInfo": {"name": "小城良方", "platformDesc": "爱奇艺独播", "releaseInfo": "上线16天"}}
         ]}});
-        assert_eq!(parse_chart(MaoyanChart::Tv, &tv, 5).unwrap()[0].metric.as_deref(), Some("热度 6517.03"));
+        assert_eq!(
+            parse_chart(MaoyanChart::Tv, &tv, 5).unwrap()[0]
+                .heat
+                .as_deref(),
+            Some("6517.03")
+        );
         let web = json!({"status": true, "dataList": {"list": [
             {"movieName": "僵尸参将2", "releaseInfo": "上映30天", "splitBox": 42900000, "splitBoxDesc": ".万"},
             {"movieName": "大片", "splitBox": 123456789.0},
             {"movieName": "小片", "splitBox": 5500}
         ]}});
         let items = parse_chart(MaoyanChart::WebMovie, &web, 5).unwrap();
-        assert_eq!(items[0].metric.as_deref(), Some("当月分账 4290万"));
-        assert_eq!(items[1].metric.as_deref(), Some("当月分账 1.23亿"));
-        assert_eq!(items[2].metric.as_deref(), Some("当月分账 5500元"));
+        assert_eq!(items[0].box_office.as_deref(), Some("4290万"));
+        assert_eq!(items[1].box_office.as_deref(), Some("1.23亿"));
+        assert_eq!(items[2].box_office.as_deref(), Some("5500元"));
 
         // 展示字段被字体混淆时改用数值字段；都不可用时不展示热度。
         let obfuscated = json!({"dataList": {"list": [
@@ -974,8 +1190,8 @@ mod tests {
             {"seriesInfo": {"name": "嫁金钗"}, "currHeatDesc": "\u{e123}\u{e456}"}
         ]}});
         let items = parse_chart(MaoyanChart::Tv, &obfuscated, 10).unwrap();
-        assert_eq!(items[0].metric.as_deref(), Some("热度 8523.60"));
-        assert_eq!(items[1].metric, None);
+        assert_eq!(items[0].heat.as_deref(), Some("8523.60"));
+        assert_eq!(items[1].heat, None);
     }
 
     #[test]
@@ -988,7 +1204,12 @@ mod tests {
             chart_url(MaoyanChart::WebMovie, MaoyanPlatform::Tencent, "20261105"),
             "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatNetData?showDate=20261101&platformType=3&dateType=2&rankType=0"
         );
-        assert!(latest_available_date(&json!({"status": false, "calendarNet": {"selectMaxDate": "2999-11-20"}})).is_none());
+        assert!(
+            latest_available_date(
+                &json!({"status": false, "calendarNet": {"selectMaxDate": "2999-11-20"}})
+            )
+            .is_none()
+        );
         assert_eq!(
             chart_url(MaoyanChart::Variety, MaoyanPlatform::All, "20261105"),
             "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData?seriesType=2&showDate=20261105"
@@ -1007,14 +1228,15 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "哪吒之魔童闹海");
         assert_eq!(items[0].release_info.as_deref(), Some("2025-01-29 上映"));
-        assert_eq!(items[0].metric.as_deref(), Some("票房 154.46亿"));
+        assert_eq!(items[0].total_box_office.as_deref(), Some("154.46亿"));
 
         let mojo = r#"<table><tr><th>Rank</th><th>Release Group</th></tr>
             <tr><td>1</td><td><a href="/releasegroup/x">Spider-Man: Brand New Day</a></td><td>$2,521,214,671</td><td>$958,944,095</td><td>38.0%</td></tr></table>"#;
         let items = parse_box_office_mojo(mojo, 10);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "Spider-Man: Brand New Day");
-        assert_eq!(items[0].metric.as_deref(), Some("全球 25.21亿美元 · 北美 9.59亿美元"));
+        assert_eq!(items[0].total_box_office.as_deref(), Some("25.21亿美元"));
+        assert_eq!(items[0].box_office.as_deref(), Some("9.59亿美元"));
         assert_eq!(
             chart_url(MaoyanChart::Year, MaoyanPlatform::All, "20261105"),
             "https://piaofang.maoyan.com/rankings/year?year=2026"
@@ -1035,7 +1257,12 @@ mod tests {
         }
     }
 
-    fn douban(id: &str, title: &str, year: Option<u32>, media_type: TmdbMediaType) -> DoubanSubject {
+    fn douban(
+        id: &str,
+        title: &str,
+        year: Option<u32>,
+        media_type: TmdbMediaType,
+    ) -> DoubanSubject {
         DoubanSubject {
             id: id.to_string(),
             title: title.to_string(),
@@ -1054,19 +1281,41 @@ mod tests {
             douban("2", "庆余年 第二季", Some(2024), TmdbMediaType::Tv),
             douban("3", "庆余年第二季", Some(2024), TmdbMediaType::Movie),
         ];
-        assert_eq!(pick_douban("庆余年 第二季", &TmdbMediaType::Tv, subjects.clone()).unwrap().id, "2");
+        assert_eq!(
+            pick_douban("庆余年 第二季", &TmdbMediaType::Tv, subjects.clone())
+                .unwrap()
+                .id,
+            "2"
+        );
         assert!(pick_douban("庆余年之外", &TmdbMediaType::Tv, subjects).is_none());
         let seasons = vec![
             douban("7", "向往的生活 第一季", Some(2017), TmdbMediaType::Tv),
             douban("8", "向往的生活 第八季", Some(2024), TmdbMediaType::Tv),
         ];
-        assert_eq!(pick_douban("向往的生活", &TmdbMediaType::Tv, seasons).unwrap().id, "8");
+        assert_eq!(
+            pick_douban("向往的生活", &TmdbMediaType::Tv, seasons)
+                .unwrap()
+                .id,
+            "8"
+        );
 
         let names = vec!["小城良方".to_string()];
-        let results = vec![tmdb(1, "小城", Some(2026)), tmdb(2, "小城良方", Some(2020)), tmdb(3, "小城良方", Some(2026))];
-        assert_eq!(pick_tmdb_for(&names, Some(2026), results).unwrap().tmdb_id, 3);
+        let results = vec![
+            tmdb(1, "小城", Some(2026)),
+            tmdb(2, "小城良方", Some(2020)),
+            tmdb(3, "小城良方", Some(2026)),
+        ];
+        assert_eq!(
+            pick_tmdb_for(&names, Some(2026), results).unwrap().tmdb_id,
+            3
+        );
         // 没有同名条目时接受年份相符的结果（TMDB 已按年份过滤）；都不符合则不匹配。
-        assert_eq!(pick_tmdb_for(&names, Some(2026), vec![tmdb(9, "Remedy", Some(2026))]).unwrap().tmdb_id, 9);
+        assert_eq!(
+            pick_tmdb_for(&names, Some(2026), vec![tmdb(9, "Remedy", Some(2026))])
+                .unwrap()
+                .tmdb_id,
+            9
+        );
         assert!(pick_tmdb_for(&names, Some(2026), vec![tmdb(9, "Remedy", Some(2010))]).is_none());
     }
 
@@ -1075,7 +1324,9 @@ mod tests {
         assert_eq!(tmdb_query_title("庆余年 第二季"), "庆余年");
         assert_eq!(tmdb_query_title("第一炉香"), "第一炉香");
         assert_eq!(
-            latest_available_date(&json!({"status": false, "calendarNet": {"selectMaxDate": "2020-11-04"}})),
+            latest_available_date(
+                &json!({"status": false, "calendarNet": {"selectMaxDate": "2020-11-04"}})
+            ),
             Some("20201104".to_string())
         );
     }
@@ -1099,15 +1350,23 @@ mod tests {
             (MaoyanChart::WebMovie, MaoyanPlatform::All),
             (MaoyanChart::WebMovie, MaoyanPlatform::Tencent),
         ];
-        let mut urls: Vec<String> = keys.iter().map(|(chart, platform)| chart_url(*chart, *platform, &date)).collect();
-        let mut names: Vec<String> = keys.iter().map(|(chart, platform)| format!("{}-{}.json", chart.as_str(), platform.as_str())).collect();
+        let mut urls: Vec<String> = keys
+            .iter()
+            .map(|(chart, platform)| chart_url(*chart, *platform, &date))
+            .collect();
+        let mut names: Vec<String> = keys
+            .iter()
+            .map(|(chart, platform)| format!("{}-{}.json", chart.as_str(), platform.as_str()))
+            .collect();
         if let Ok(extra) = std::env::var("MAOYAN_EXTRA_URLS") {
             for (index, url) in extra.split_whitespace().enumerate() {
                 urls.push(url.to_string());
                 names.push(format!("extra-{index}.json"));
             }
         }
-        let results = fetch_chart_payloads_in_browser(&settings, &urls).await.unwrap();
+        let results = fetch_chart_payloads_in_browser(&settings, &urls)
+            .await
+            .unwrap();
         for (name, result) in names.into_iter().zip(results) {
             let body = match result {
                 Ok(value) => serde_json::to_string_pretty(&value).unwrap(),

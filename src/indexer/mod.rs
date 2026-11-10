@@ -85,6 +85,9 @@ pub struct SearchResult {
     pub source_site: String,
     pub torrent_id: String,
     pub title: String,
+    /// 站点的副标题（中文名、集数等），没有时为空。
+    #[serde(default)]
+    pub subtitle: Option<String>,
     pub detail_url: Option<String>,
     pub download_locator: Option<String>,
     pub magnet: Option<String>,
@@ -111,11 +114,12 @@ impl Serialize for SearchResult {
             .map(|_| self.torrent_id.clone());
         let magnet = self.magnet.as_deref().and_then(sanitize_magnet);
 
-        let mut state = serializer.serialize_struct("SearchResult", 11)?;
+        let mut state = serializer.serialize_struct("SearchResult", 12)?;
         state.serialize_field("site_id", &self.site_id)?;
         state.serialize_field("source_site", &self.source_site)?;
         state.serialize_field("torrent_id", &self.torrent_id)?;
         state.serialize_field("title", &self.title)?;
+        state.serialize_field("subtitle", &self.subtitle)?;
         state.serialize_field("detail_url", &detail_url)?;
         state.serialize_field("download_locator", &download_locator)?;
         state.serialize_field("magnet", &magnet)?;
@@ -839,6 +843,7 @@ mod tests {
             source_site: "Example".to_string(),
             torrent_id: "42".to_string(),
             title: "Release".to_string(),
+            subtitle: None,
             detail_url: Some(
                 "https://tracker.example/details.php?id=42&passkey=very-secret".to_string(),
             ),

@@ -687,4 +687,19 @@ mod tests {
             DecisionEngine::evaluate(&episode_target(1, 3), &release, &profile(), 10);
         assert!(first_season.accepted);
     }
+
+    #[test]
+    fn probe_matches_episode_titles_that_carry_a_release_year() {
+        let target = MediaTarget::Episode {
+            tmdb_id: 1,
+            titles: vec!["The Silent Storm".into()],
+            year: None,
+            season: 1,
+            episode: 0,
+            allow_season_pack: true,
+        };
+        let release =
+            parse("The Silent Storm 2026 S01 E09-10 2160p Youku WEB-DL HFR H265 AAC-Momoda");
+        assert!(IdentityGate::matches_series(&target, &release));
+    }
 }

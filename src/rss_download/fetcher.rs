@@ -288,6 +288,7 @@ impl RssFetcher {
                     source_site: site.name,
                     torrent_id: torrent_id.clone(),
                     title: item.title.clone(),
+                    subtitle: None,
                     detail_url: locator.detail_url.clone(),
                     download_locator: Some(torrent_id.clone()),
                     magnet: None,

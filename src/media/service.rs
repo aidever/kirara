@@ -18,16 +18,20 @@ use super::domain::group::{
     self as group_policy, CandidateGroupInfo, GroupCandidate, GroupPolicy, GroupSelection,
 };
 use super::domain::{
-    DecisionEngine, IdentityGate, MatchDecision, MediaTarget, QualityProfile, QueryGenerator, RejectCode,
-    ReleaseInfo, ReleaseParser, SearchCriteria, SeasonEpisode, SortKey, stable_release_key,
+    DecisionEngine, IdentityGate, MatchDecision, MediaTarget, QualityProfile, QueryGenerator,
+    RejectCode, ReleaseInfo, ReleaseParser, SearchCriteria, SeasonEpisode, SortKey,
+    stable_release_key,
 };
+use super::global_rank::{GlobalRankStore, RankSource};
 use super::lease::process_owner_id;
-use super::global_rank::{self, GlobalRankStore, RankBoard, RankSnapshot, RankSource, RankSourceView};
-use super::maoyan::{self, MaoyanChart, MaoyanPlatform, MaoyanRankResponse, MaoyanRankView, MaoyanStore};
+use super::maoyan::{
+    self, MaoyanChart, MaoyanPlatform, MaoyanRankResponse, MaoyanRankView, MaoyanStore,
+};
 use super::models::{
     MEDIA_DOWNLOAD_RECONCILIATION_GRACE_SECONDS, MediaDownloadCoverage, MediaDownloadDeleteOutcome,
-    MediaDownloadDeletion, MediaDownloadRecord, MediaGroupUpgradeRecord, NewMediaDownload, NewSubscription,
-    QualityProfileRecord, SubscriptionRecord, SubscriptionTargetRecord, media_download_category,
+    MediaDownloadDeletion, MediaDownloadRecord, MediaGroupUpgradeRecord, NewMediaDownload,
+    NewSubscription, QualityProfileRecord, SubscriptionRecord, SubscriptionTargetRecord,
+    media_download_category,
 };
 use super::progression::{
     ProgressionError, SubscriptionTargetSeedStatus, TargetReadiness, air_date_eligible_at,
@@ -35,6 +39,8 @@ use super::progression::{
 };
 use super::tmdb::{TmdbClient, TmdbDetails, TmdbError, TmdbMedia, TmdbMediaType, TmdbSeason};
 use super::torrent::{TorrentMetadataError, torrent_infohash};
+
+mod rank;
 
 const SUBSCRIPTION_LEASE_SECONDS: i64 = 10 * 60;
 const DOWNLOAD_LEASE_SECONDS: i64 = 5 * 60;
@@ -223,7 +229,9 @@ impl ReleaseGroupBucket {
     fn summarize(self) -> ReleaseGroupSummary {
         fn push_unique(values: &mut Vec<String>, value: Option<&str>) {
             if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty())
-                && !values.iter().any(|existing| existing.eq_ignore_ascii_case(value))
+                && !values
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(value))
             {
                 values.push(value.to_string());
             }
@@ -246,6 +254,12 @@ impl ReleaseGroupBucket {
                 push_unique(&mut hdr_formats, Some(hdr));
             }
             episodes.extend(release.episodes.iter().copied());
+            if release.episodes.is_empty()
+                && let Some(total) = release.total_episodes.filter(|total| *total <= 1000)
+            {
+                // 「全30集」整季包：已包含第 1 到 30 集。
+                episodes.extend(1..=total);
+            }
             absolute_episodes.extend(release.absolute_episodes.iter().copied());
             let units = release.episodes.len().max(release.absolute_episodes.len());
             if release.full_season || units > 1 {
@@ -451,228 +465,22 @@ impl MediaService {
         tokio::spawn(async move {
             tokio::time::sleep(StdDuration::from_secs(20)).await;
             loop {
-                service.ensure_maoyan_loaded().await;
-                if service.maoyan.is_stale().await {
-                    service.refresh_maoyan().await;
-                }
-                service.ensure_global_rank_loaded().await;
-                for source in RankSource::ALL {
-                    if service.global_rank.is_stale(source).await {
-                        service.refresh_global_rank(source).await;
+                let settings = service.rank_settings().await;
+                if settings.auto_refresh {
+                    service.ensure_maoyan_loaded().await;
+                    if settings.maoyan.enabled && service.maoyan.is_stale().await {
+                        service.refresh_maoyan().await;
+                    }
+                    service.ensure_global_rank_loaded().await;
+                    for source in RankSource::FETCHED {
+                        if settings.enabled(source) && service.global_rank.is_stale(source).await {
+                            service.refresh_global_rank(source).await;
+                        }
                     }
                 }
                 tokio::time::sleep(StdDuration::from_secs(5 * 60)).await;
             }
         });
-    }
-
-    async fn ensure_global_rank_loaded(&self) {
-        let db = self.db.clone();
-        self.global_rank
-            .load_once(|| async move {
-                match db.list_global_rank_snapshots().await {
-                    Ok(rows) => rows
-                        .into_iter()
-                        .filter_map(|(_, payload)| serde_json::from_str::<RankSnapshot>(&payload).ok())
-                        .collect(),
-                    Err(error) => {
-                        tracing::warn!(%error, "failed to load global rank snapshots");
-                        Vec::new()
-                    }
-                }
-            })
-            .await;
-    }
-
-    /// 全球榜单（Netflix / 红果短剧 / 音乐）：返回后台快照；尚无数据时触发一次后台刷新。
-    pub async fn global_rank(&self, source: RankSource) -> RankSourceView {
-        self.ensure_global_rank_loaded().await;
-        let mut view = self.global_rank.view(source).await;
-        if view.fetched_at.is_none() && !view.refreshing && view.error.is_none() {
-            view.refreshing = self.spawn_global_rank_refresh(source);
-        }
-        view
-    }
-
-    pub fn spawn_global_rank_refresh(&self, source: RankSource) -> bool {
-        if self.global_rank.is_refreshing(source) {
-            return true;
-        }
-        let service = self.clone();
-        tokio::spawn(async move {
-            service.refresh_global_rank(source).await;
-        });
-        true
-    }
-
-    async fn refresh_global_rank(&self, source: RankSource) {
-        self.ensure_global_rank_loaded().await;
-        let Some(_guard) = self.global_rank.try_begin_refresh(source) else {
-            return;
-        };
-        self.global_rank.mark_attempt(source).await;
-        let started = Instant::now();
-        let http = match self
-            .db
-            .get_settings()
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|settings| client_factory::build_client(settings.proxy.as_deref()).map_err(|error| error.to_string()))
-        {
-            Ok(http) => http,
-            Err(error) => {
-                tracing::warn!(source = source.as_str(), %error, "global rank refresh skipped");
-                self.global_rank.set_error(source, error).await;
-                return;
-            }
-        };
-        let previous = self.global_rank.snapshot(source).await;
-        let result = match source {
-            RankSource::Netflix => self.fetch_netflix_boards(&http, previous.as_ref()).await,
-            RankSource::Hongguo => fetch_hongguo_boards(&http).await,
-            RankSource::Music => fetch_music_boards(&http).await,
-        };
-        let (mut boards, error) = match result {
-            Ok(Some(found)) => found,
-            // 数据未更新（Netflix 同一周），保留现有快照。
-            Ok(None) => return,
-            Err(error) => {
-                tracing::warn!(source = source.as_str(), %error, "global rank refresh failed");
-                self.global_rank.set_error(source, error).await;
-                return;
-            }
-        };
-        // 部分榜单失败时沿用上一次的数据，避免该榜在页面上消失。
-        if let Some(previous) = &previous {
-            for old in &previous.boards {
-                if !boards.iter().any(|board| board.key == old.key) && error.is_some() {
-                    boards.push(old.clone());
-                }
-            }
-        }
-        if boards.is_empty() {
-            self.global_rank
-                .set_error(source, error.unwrap_or_else(|| "没有获取到任何榜单".to_string()))
-                .await;
-            return;
-        }
-        let snapshot = RankSnapshot { source, fetched_at: Utc::now().to_rfc3339(), boards };
-        match serde_json::to_string(&snapshot) {
-            Ok(payload) => {
-                if let Err(error) = self
-                    .db
-                    .save_global_rank_snapshot(source.as_str().to_string(), payload, snapshot.fetched_at.clone())
-                    .await
-                {
-                    tracing::warn!(%error, "failed to persist global rank snapshot");
-                }
-            }
-            Err(error) => tracing::warn!(%error, "failed to serialize global rank snapshot"),
-        }
-        let board_count = snapshot.boards.len();
-        self.global_rank.put(snapshot).await;
-        if let Some(error) = error {
-            self.global_rank.set_error(source, error).await;
-        }
-        tracing::info!(
-            source = source.as_str(),
-            boards = board_count,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "global rank refreshed"
-        );
-    }
-
-    /// Netflix：全球榜文件很小，先取它判断是否发布了新一周；没有新数据时不再下载约 30MB 的地区榜。
-    async fn fetch_netflix_boards(
-        &self,
-        http: &reqwest::Client,
-        previous: Option<&RankSnapshot>,
-    ) -> Result<Option<(Vec<RankBoard>, Option<String>)>, String> {
-        let global = global_rank::fetch_netflix_global(http).await?;
-        let week = global.0.clone();
-        let regions_expected = global_rank::NETFLIX_REGIONS.len() - 1;
-        if let Some(previous) = previous {
-            let has_week = previous.boards.iter().all(|board| board.period.as_deref() == Some(week.as_str()));
-            let regions: HashSet<&str> = previous.boards.iter().map(|board| board.group.as_str()).collect();
-            if has_week && regions.len() > regions_expected {
-                // 同一周不重新下载地区榜，但之前没匹配上 TMDB 的条目（例如当时还没配置 TMDB）再补匹配一次。
-                let unmatched = previous.boards.iter().flat_map(|board| &board.items).any(|item| item.tmdb.is_none());
-                if !unmatched || self.tmdb_client().await.is_err() {
-                    return Ok(None);
-                }
-                let mut boards = previous.boards.clone();
-                self.match_netflix_titles(&mut boards).await;
-                return Ok(Some((boards, None)));
-            }
-        }
-        let (countries, error) = match global_rank::fetch_netflix_countries(http).await {
-            Ok(countries) => (countries, None),
-            Err(error) => (HashMap::new(), Some(format!("地区榜获取失败：{error}"))),
-        };
-        let mut boards = global_rank::netflix_boards(Some(global), &countries);
-        self.match_netflix_titles(&mut boards).await;
-        Ok(Some((boards, error)))
-    }
-
-    /// 按英文片名匹配 TMDB，标题换成 TMDB 的本地化名称以便直接订阅。
-    async fn match_netflix_titles(&self, boards: &mut [RankBoard]) {
-        use futures::StreamExt;
-
-        let Ok(tmdb) = self.tmdb_client().await else {
-            return;
-        };
-        let previous = self.global_rank.previous_matches(RankSource::Netflix).await;
-        let mut unique = Vec::new();
-        let mut seen = HashSet::new();
-        for board in boards.iter() {
-            for item in &board.items {
-                if let (Some(original), Some(media_type)) = (&item.original_title, &item.media_type)
-                    && seen.insert((original.clone(), media_type.as_str()))
-                {
-                    unique.push((original.clone(), media_type.clone()));
-                }
-            }
-        }
-        let store = &self.global_rank;
-        let tmdb = &tmdb;
-        let previous = &previous;
-        let found: HashMap<(String, &'static str), Option<TmdbMedia>> = futures::stream::iter(unique)
-            .map(|(title, media_type)| async move {
-                if let Some(cached) = store.cached_match(&title, &media_type).await {
-                    return ((title, media_type.as_str()), cached);
-                }
-                if let Some(earlier) = previous.get(&(title.clone(), media_type.as_str())) {
-                    store.store_match(title.clone(), &media_type, Some(earlier.clone())).await;
-                    return ((title, media_type.as_str()), Some(earlier.clone()));
-                }
-                match tmdb.search_typed(&title, &media_type, None).await {
-                    Ok(results) => {
-                        let picked = maoyan::pick_tmdb_match(&title, results);
-                        store.store_match(title.clone(), &media_type, picked.clone()).await;
-                        ((title, media_type.as_str()), picked)
-                    }
-                    Err(error) => {
-                        tracing::debug!(%error, title, "netflix tmdb lookup failed");
-                        ((title, media_type.as_str()), None)
-                    }
-                }
-            })
-            .buffer_unordered(6)
-            .collect()
-            .await;
-        for board in boards.iter_mut() {
-            for item in &mut board.items {
-                let (Some(original), Some(media_type)) = (&item.original_title, &item.media_type) else {
-                    continue;
-                };
-                if let Some(Some(media)) = found.get(&(original.clone(), media_type.as_str())) {
-                    item.title = media.title.clone();
-                    item.poster = media.poster_path.clone();
-                    item.overview = Some(media.overview.clone()).filter(|text| !text.is_empty());
-                    item.tmdb = Some(media.clone());
-                }
-            }
-        }
     }
 
     /// 豆瓣条目详情（缓存 6 小时）。
@@ -705,13 +513,20 @@ impl MediaService {
         let poster = super::douban::fetch_poster(&client, id)
             .await
             .map_err(|error| MediaServiceError::Upstream(error.to_string()))?;
-        self.maoyan.store_poster(id.to_string(), poster.clone()).await;
+        self.maoyan
+            .store_poster(id.to_string(), poster.clone())
+            .await;
         Ok(poster)
     }
 
     async fn resolve_maoyan_titles(
         &self,
-        parsed: &[(MaoyanChart, MaoyanPlatform, String, Vec<maoyan::MaoyanRankItem>)],
+        parsed: &[(
+            MaoyanChart,
+            MaoyanPlatform,
+            String,
+            Vec<maoyan::MaoyanRankItem>,
+        )],
         settings: &crate::config::GlobalConfig,
     ) -> HashMap<(String, &'static str), maoyan::MediaMatch> {
         use futures::StreamExt;
@@ -749,13 +564,17 @@ impl MediaService {
                     }
                     let earlier = previous.get(&(title.clone(), media_type.as_str()));
                     if let Some(earlier) = earlier {
-                        store.store_match(title.clone(), &media_type, earlier.clone()).await;
+                        store
+                            .store_match(title.clone(), &media_type, earlier.clone())
+                            .await;
                         return (title, media_type, earlier.clone(), true);
                     }
                     let (found, reliable) =
                         maoyan::resolve_media(&title, &media_type, douban, tmdb).await;
                     if reliable {
-                        store.store_match(title.clone(), &media_type, found.clone()).await;
+                        store
+                            .store_match(title.clone(), &media_type, found.clone())
+                            .await;
                     }
                     (title, media_type, found, reliable)
                 }
@@ -764,10 +583,21 @@ impl MediaService {
             .buffer_unordered(8)
             .collect()
             .await;
-        let unreliable = results.iter().filter(|(_, _, _, reliable)| !reliable).count();
-        let unmatched = results.iter().filter(|(_, _, found, _)| found.tmdb.is_none()).count();
+        let unreliable = results
+            .iter()
+            .filter(|(_, _, _, reliable)| !reliable)
+            .count();
+        let unmatched = results
+            .iter()
+            .filter(|(_, _, found, _)| found.tmdb.is_none())
+            .count();
         if unreliable > 0 {
-            tracing::warn!(total, unreliable, unmatched, "some maoyan titles could not be matched due to request failures; they will be retried next refresh");
+            tracing::warn!(
+                total,
+                unreliable,
+                unmatched,
+                "some maoyan titles could not be matched due to request failures; they will be retried next refresh"
+            );
         } else {
             tracing::info!(total, unmatched, "maoyan titles matched");
         }
@@ -779,6 +609,11 @@ impl MediaService {
 
     async fn refresh_maoyan(&self) {
         self.ensure_maoyan_loaded().await;
+        let rank_settings = self.rank_settings().await;
+        let scope = rank_settings.maoyan.clone();
+        if !scope.enabled {
+            return;
+        }
         let Some(_guard) = self.maoyan.try_begin_refresh() else {
             return;
         };
@@ -799,30 +634,54 @@ impl MediaService {
             }
         };
         let show_date = maoyan::show_date();
-        let mut payloads: Vec<(MaoyanChart, MaoyanPlatform, String, Result<serde_json::Value, String>)> =
-            Vec::new();
+        let mut payloads: Vec<(
+            MaoyanChart,
+            MaoyanPlatform,
+            String,
+            Result<serde_json::Value, String>,
+        )> = Vec::new();
 
         // 票房榜可直接请求。
-        let movie_url = maoyan::chart_url(MaoyanChart::Movie, MaoyanPlatform::All, &show_date);
-        let movie = maoyan::fetch_chart_payload(&http, &settings, MaoyanChart::Movie, &movie_url)
-            .await
-            .map_err(|error| error.to_string());
-        payloads.push((MaoyanChart::Movie, MaoyanPlatform::All, show_date.clone(), movie));
+        if scope.wants(MaoyanChart::Movie, MaoyanPlatform::All) {
+            let movie_url = maoyan::chart_url(MaoyanChart::Movie, MaoyanPlatform::All, &show_date);
+            let movie =
+                maoyan::fetch_chart_payload(&http, &settings, MaoyanChart::Movie, &movie_url)
+                    .await
+                    .map_err(|error| error.to_string());
+            payloads.push((
+                MaoyanChart::Movie,
+                MaoyanPlatform::All,
+                show_date.clone(),
+                movie,
+            ));
+        }
 
         // 影史 / 年度 / 全球票房是服务端直出页面，并发直接请求。
-        let html_charts: Vec<MaoyanChart> = MaoyanChart::ALL.into_iter().filter(|chart| chart.is_html()).collect();
-        let html_results = futures::future::join_all(html_charts.iter().map(|chart| {
-            let url = maoyan::chart_url(*chart, MaoyanPlatform::All, &show_date);
-            let http = &http;
-            async move { maoyan::fetch_html_chart(http, *chart, &url, maoyan::MAOYAN_MAX_LIMIT).await }
-        }))
-        .await;
+        let html_charts: Vec<MaoyanChart> = MaoyanChart::ALL
+            .into_iter()
+            .filter(|chart| chart.is_html() && scope.wants(*chart, MaoyanPlatform::All))
+            .collect();
+        let html_results =
+            futures::future::join_all(html_charts.iter().map(|chart| {
+                let url = maoyan::chart_url(*chart, MaoyanPlatform::All, &show_date);
+                let http = &http;
+                async move {
+                    maoyan::fetch_html_chart(http, *chart, &url, maoyan::MAOYAN_MAX_LIMIT).await
+                }
+            }))
+            .await;
 
         // 热度榜在同一个浏览器页面里批量获取，避免每个榜单都启动一次浏览器。
         let heat_keys: Vec<(MaoyanChart, MaoyanPlatform)> = MaoyanChart::ALL
             .into_iter()
             .filter(|chart| chart.needs_browser())
-            .flat_map(|chart| chart.platforms().iter().map(move |platform| (chart, *platform)))
+            .flat_map(|chart| {
+                chart
+                    .platforms()
+                    .iter()
+                    .map(move |platform| (chart, *platform))
+            })
+            .filter(|(chart, platform)| scope.wants(*chart, *platform))
             .collect();
         let heat = fetch_heat_batch(&settings, &heat_keys, |_| show_date.clone()).await;
         let mut retry = Vec::new();
@@ -871,7 +730,9 @@ impl MediaService {
                 Ok(items) => parsed.push((chart, MaoyanPlatform::All, show_date.clone(), items)),
                 Err(error) => {
                     tracing::debug!(chart = chart.as_str(), %error, "maoyan box office page refresh failed");
-                    self.maoyan.set_error(chart, MaoyanPlatform::All, error.to_string()).await;
+                    self.maoyan
+                        .set_error(chart, MaoyanPlatform::All, error.to_string())
+                        .await;
                 }
             }
         }
@@ -882,7 +743,8 @@ impl MediaService {
         let mut succeeded = 0usize;
         for (chart, platform, date, mut items) in parsed {
             for item in &mut items {
-                if let Some(found) = matches.get(&(item.title.clone(), chart.media_type().as_str())) {
+                if let Some(found) = matches.get(&(item.title.clone(), chart.media_type().as_str()))
+                {
                     item.douban = found.douban.clone();
                     item.tmdb = found.tmdb.clone();
                 }
@@ -919,6 +781,7 @@ impl MediaService {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "maoyan charts refreshed"
         );
+        self.finish_maoyan_refresh(&rank_settings, succeeded).await;
     }
 
     pub fn database(&self) -> &Database {
@@ -1191,9 +1054,11 @@ impl MediaService {
     ) -> bool {
         let profile = profile_to_domain(profile);
         results.iter().any(|result| {
-            self.parser.parse(&result.title).is_ok_and(|release| {
-                DecisionEngine::evaluate(target, &release, &profile, result.seeders).accepted
-            })
+            self.parser
+                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+                .is_ok_and(|release| {
+                    DecisionEngine::evaluate(target, &release, &profile, result.seeders).accepted
+                })
         })
     }
 
@@ -1208,7 +1073,10 @@ impl MediaService {
         let domain_profile = profile.map(profile_to_domain);
         let mut candidates = Vec::with_capacity(results.len().min(RESOURCE_SEARCH_RESULT_LIMIT));
         for result in results {
-            match self.parser.parse(&result.title) {
+            match self
+                .parser
+                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+            {
                 Ok(release) => {
                     let decision = request.target.as_ref().zip(domain_profile.as_ref()).map(
                         |(target, profile)| {
@@ -1535,11 +1403,8 @@ impl MediaService {
             .count();
         let now = Utc::now();
         let (selection, group_info) = {
-            let facts: Vec<GroupCandidate<'_>> = search
-                .candidates
-                .iter()
-                .map(group_candidate)
-                .collect();
+            let facts: Vec<GroupCandidate<'_>> =
+                search.candidates.iter().map(group_candidate).collect();
             group_policy::select(&subscription.group_policy, &facts, now)
         };
         for (candidate, info) in search.candidates.iter_mut().zip(group_info) {
@@ -2108,11 +1973,14 @@ impl MediaService {
                         subscription.quality_profile_id
                     ))
                 })?;
-            let release = self.parser.parse(&result.title).map_err(|error| {
-                MediaServiceError::Invalid(format!(
-                    "release title could not be matched to the subscription: {error}"
-                ))
-            })?;
+            let release = self
+                .parser
+                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+                .map_err(|error| {
+                    MediaServiceError::Invalid(format!(
+                        "release title could not be matched to the subscription: {error}"
+                    ))
+                })?;
             let decision = DecisionEngine::evaluate(
                 &target,
                 &release,
@@ -2153,11 +2021,14 @@ impl MediaService {
                             request.quality_profile_id
                         ))
                     })?;
-                let release = self.parser.parse(&result.title).map_err(|error| {
-                    MediaServiceError::Invalid(format!(
-                        "release title could not be matched to the search target: {error}"
-                    ))
-                })?;
+                let release = self
+                    .parser
+                    .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+                    .map_err(|error| {
+                        MediaServiceError::Invalid(format!(
+                            "release title could not be matched to the search target: {error}"
+                        ))
+                    })?;
                 Some(DecisionEngine::evaluate(
                     target,
                     &release,
@@ -2923,7 +2794,9 @@ impl MediaService {
             ));
         }
         let media_type = TmdbMediaType::parse(&request.media_type)?;
-        let details = self.tmdb_details(request.tmdb_id, media_type.clone()).await?;
+        let details = self
+            .tmdb_details(request.tmdb_id, media_type.clone())
+            .await?;
         let mut titles = vec![details.media.title.clone()];
         if let Some(original) = &details.media.original_title {
             push_case_insensitive(&mut titles, original);
@@ -2991,7 +2864,10 @@ impl MediaService {
             if !seen.insert((result.site_id, result.torrent_id.clone())) {
                 continue;
             }
-            let Ok(release) = self.parser.parse(&result.title) else {
+            let Ok(release) = self
+                .parser
+                .parse_with_subtitle(&result.title, result.subtitle.as_deref())
+            else {
                 continue;
             };
             if !IdentityGate::matches_series(&target, &release) {
@@ -3016,8 +2892,10 @@ impl MediaService {
             };
             bucket.items.push((result, release));
         }
-        let mut groups: Vec<ReleaseGroupSummary> =
-            buckets.into_iter().map(ReleaseGroupBucket::summarize).collect();
+        let mut groups: Vec<ReleaseGroupSummary> = buckets
+            .into_iter()
+            .map(ReleaseGroupBucket::summarize)
+            .collect();
         groups.sort_by(|left, right| {
             left.name
                 .is_none()
@@ -3047,8 +2925,9 @@ impl MediaService {
     /// 洗版巡检：检查等待更好版本的剧集，并处理已完成下载的新版本。
     pub async fn process_group_upgrades(&self, limit: usize) -> Result<usize, MediaServiceError> {
         let settings = self.db.get_media_settings().await?;
-        let checked_before =
-            (Utc::now() - Duration::minutes(settings.scan_interval_mins.max(5) as i64)).to_rfc3339();
+        let checked_before = (Utc::now()
+            - Duration::minutes(settings.scan_interval_mins.max(5) as i64))
+        .to_rfc3339();
         let due = self
             .db
             .list_due_media_group_upgrades(&checked_before, limit)
@@ -3096,7 +2975,9 @@ impl MediaService {
             return Ok(());
         }
         let expired = chrono::DateTime::parse_from_rfc3339(&record.created_at)
-            .map(|created| now - created.with_timezone(&Utc) > Duration::days(GROUP_UPGRADE_WATCH_DAYS))
+            .map(|created| {
+                now - created.with_timezone(&Utc) > Duration::days(GROUP_UPGRADE_WATCH_DAYS)
+            })
             .unwrap_or(false);
         if expired {
             record.status = "expired".to_string();
@@ -3117,7 +2998,8 @@ impl MediaService {
                 page_size: Some(50),
             })
             .await?;
-        let facts: Vec<GroupCandidate<'_>> = search.candidates.iter().map(group_candidate).collect();
+        let facts: Vec<GroupCandidate<'_>> =
+            search.candidates.iter().map(group_candidate).collect();
         let Some((index, rank)) = group_policy::select_upgrade(policy, &facts, current_rank) else {
             self.db.save_media_group_upgrade(&record).await?;
             return Ok(());
@@ -3266,7 +3148,10 @@ impl MediaService {
                 .map_err(MediaServiceError::Downloader)?;
         } else {
             client
-                .add_torrent_tags(vec![infohash.to_string()], vec![GROUP_UPGRADE_REPLACED_TAG.to_string()])
+                .add_torrent_tags(
+                    vec![infohash.to_string()],
+                    vec![GROUP_UPGRADE_REPLACED_TAG.to_string()],
+                )
                 .await
                 .map_err(MediaServiceError::Downloader)?;
         }
@@ -3872,70 +3757,6 @@ impl From<reqwest::Error> for MediaServiceError {
     }
 }
 
-async fn fetch_hongguo_boards(
-    http: &reqwest::Client,
-) -> Result<Option<(Vec<RankBoard>, Option<String>)>, String> {
-    let mut boards = Vec::new();
-    let mut errors = Vec::new();
-    for (index, (key, route, name)) in global_rank::HONGGUO_BOARDS.into_iter().enumerate() {
-        if index > 0 {
-            // 官网是 SSR 直出，放慢节奏避免被当成爬虫。
-            tokio::time::sleep(StdDuration::from_millis(400)).await;
-        }
-        match global_rank::fetch_hongguo_board(http, route).await {
-            Ok(items) => boards.push(RankBoard {
-                key: key.to_string(),
-                name: name.to_string(),
-                group: String::new(),
-                group_name: String::new(),
-                kind: None,
-                period: None,
-                url: Some(format!("https://hongguoduanju.com/rank/{route}")),
-                items,
-            }),
-            Err(error) => errors.push(format!("{name}：{error}")),
-        }
-    }
-    if boards.is_empty() {
-        return Err(errors.join("；"));
-    }
-    Ok(Some((boards, (!errors.is_empty()).then(|| errors.join("；")))))
-}
-
-async fn fetch_music_boards(
-    http: &reqwest::Client,
-) -> Result<Option<(Vec<RankBoard>, Option<String>)>, String> {
-    let results = futures::future::join_all(global_rank::MUSIC_BOARDS.into_iter().map(
-        |(platform, platform_name, key, name, native)| async move {
-            let result = global_rank::fetch_music_board(http, platform, native).await;
-            (platform, platform_name, key, name, result)
-        },
-    ))
-    .await;
-    let mut boards = Vec::new();
-    let mut errors = Vec::new();
-    for (platform, platform_name, key, name, result) in results {
-        match result {
-            Ok((period, items, url)) if !items.is_empty() => boards.push(RankBoard {
-                key: format!("{platform}:{key}"),
-                name: name.to_string(),
-                group: platform.to_string(),
-                group_name: platform_name.to_string(),
-                kind: None,
-                period,
-                url: Some(url),
-                items,
-            }),
-            Ok(_) => errors.push(format!("{platform_name}{name}：返回为空")),
-            Err(error) => errors.push(format!("{platform_name}{name}：{error}")),
-        }
-    }
-    if boards.is_empty() {
-        return Err(errors.join("；"));
-    }
-    Ok(Some((boards, (!errors.is_empty()).then(|| errors.join("；")))))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, VecDeque};
@@ -4394,6 +4215,7 @@ mod tests {
             source_site: "test-site".to_string(),
             torrent_id: format!("torrent-{index}"),
             title: format!("Example.Show.S01E01.1080p.WEB-DL-{index}"),
+            subtitle: None,
             detail_url: None,
             download_locator: Some(format!("torrent-{index}")),
             magnet: None,
@@ -4467,6 +4289,7 @@ mod tests {
             source_site: format!("test-site-{site_id}"),
             torrent_id: torrent_id.to_string(),
             title: title.to_string(),
+            subtitle: None,
             detail_url: None,
             download_locator: Some(torrent_id.to_string()),
             magnet: None,
@@ -4536,6 +4359,7 @@ mod tests {
             source_site: "test site".to_string(),
             torrent_id: torrent_id.to_string(),
             title: "Example.Show.S01E01.1080p.WEB-DL.H264".to_string(),
+            subtitle: None,
             detail_url: None,
             download_locator: Some(torrent_id.to_string()),
             magnet: None,
@@ -5365,6 +5189,7 @@ mod tests {
                 source_site: "site".to_string(),
                 torrent_id: "1207293".to_string(),
                 title: release.raw_title.clone(),
+                subtitle: None,
                 detail_url: None,
                 download_locator: Some("1207293".to_string()),
                 magnet: None,
@@ -5508,6 +5333,7 @@ mod tests {
                 source_site: "service-site-a".to_string(),
                 torrent_id: "authoritative-unrelated-3".to_string(),
                 title: "Other.Show.S01E03.1080p.WEB-DL".to_string(),
+                subtitle: None,
                 detail_url: None,
                 download_locator: Some("authoritative-unrelated-3".to_string()),
                 magnet: None,
@@ -5601,6 +5427,7 @@ mod tests {
                 source_site: "service-site-b".to_string(),
                 torrent_id: "other-context".to_string(),
                 title: "Example.Show.S01E03.1080p.WEB-DL".to_string(),
+                subtitle: None,
                 detail_url: None,
                 download_locator: Some("other-context".to_string()),
                 magnet: None,
@@ -5641,6 +5468,7 @@ mod tests {
                 source_site: "stale-client-name".to_string(),
                 torrent_id: "authoritative-torrent".to_string(),
                 title: "Authoritative.Release.1080p.WEB-DL".to_string(),
+                subtitle: None,
                 detail_url: None,
                 download_locator: Some("authoritative-torrent".to_string()),
                 magnet: None,
@@ -5693,6 +5521,7 @@ mod tests {
             source_site: "site".to_string(),
             torrent_id: "torrent".to_string(),
             title: "Title".to_string(),
+            subtitle: None,
             detail_url: None,
             download_locator: Some("torrent".to_string()),
             magnet: None,
@@ -5951,7 +5780,11 @@ mod tests {
             site,
             HashMap::new(),
             Ok(vec![published(
-                episode_search_result(site, "backup", "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB"),
+                episode_search_result(
+                    site,
+                    "backup",
+                    "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB",
+                ),
                 1,
             )]),
         )
@@ -5968,7 +5801,12 @@ mod tests {
         assert_eq!(snapshot.candidates[0].group.group_rank, Some(1));
         let stored = db.get_subscription(subscription.id).await.unwrap().unwrap();
         assert_eq!(stored.last_status.as_deref(), Some("waiting_group"));
-        assert!(db.list_media_group_upgrades(subscription.id).await.unwrap().is_empty());
+        assert!(
+            db.list_media_group_upgrades(subscription.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -5987,11 +5825,19 @@ mod tests {
             HashMap::new(),
             Ok(vec![
                 published(
-                    episode_search_result(site, "outside", "Example.Show.S01E03.2160p.WEB-DL.H265-Other"),
+                    episode_search_result(
+                        site,
+                        "outside",
+                        "Example.Show.S01E03.2160p.WEB-DL.H265-Other",
+                    ),
                     8,
                 ),
                 published(
-                    episode_search_result(site, "backup", "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB"),
+                    episode_search_result(
+                        site,
+                        "backup",
+                        "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB",
+                    ),
                     2,
                 ),
             ]),
@@ -6000,7 +5846,9 @@ mod tests {
 
         let run = service.run_subscription(subscription.id).await.unwrap();
         assert_eq!(
-            run.download.as_ref().map(|download| download.torrent_id.as_str()),
+            run.download
+                .as_ref()
+                .map(|download| download.torrent_id.as_str()),
             Some("backup")
         );
         let upgrades = db.list_media_group_upgrades(subscription.id).await.unwrap();
@@ -6038,14 +5886,26 @@ mod tests {
             site,
             HashMap::new(),
             Ok(vec![
-                episode_search_result(site, "backup", "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB"),
-                episode_search_result(site, "primary", "Example.Show.S01E03.1080p.WEB-DL.H264-CHDWEB"),
+                episode_search_result(
+                    site,
+                    "backup",
+                    "Example.Show.S01E03.1080p.WEB-DL.H264-HHWEB",
+                ),
+                episode_search_result(
+                    site,
+                    "primary",
+                    "Example.Show.S01E03.1080p.WEB-DL.H264-CHDWEB",
+                ),
             ]),
         )
         .await;
 
         assert_eq!(service.process_group_upgrades(5).await.unwrap(), 1);
-        let upgrade = db.list_media_group_upgrades(subscription.id).await.unwrap().remove(0);
+        let upgrade = db
+            .list_media_group_upgrades(subscription.id)
+            .await
+            .unwrap()
+            .remove(0);
         assert_eq!(upgrade.status, "upgrading");
         assert_eq!(upgrade.upgrade_group.as_deref(), Some("CHDWEB"));
         assert_eq!(upgrade.upgrade_rank, Some(0));

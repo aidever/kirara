@@ -256,6 +256,7 @@ pub(super) fn parse_html_results(
             source_site: site_name.to_string(),
             torrent_id: torrent_id.clone(),
             title,
+            subtitle: None,
             detail_url: Some(detail_href),
             download_locator: Some(torrent_id),
             magnet: None,
