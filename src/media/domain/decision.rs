@@ -247,6 +247,23 @@ impl IdentityGate {
             )
         })
     }
+
+    /// 标题、年份都对得上，只是季号不同：多半是站点自行编排了季号。
+    pub fn differs_only_by_season(target: &MediaTarget, release: &ReleaseInfo) -> bool {
+        let rejections = Self::check(target, release);
+        rejections
+            .iter()
+            .any(|rejection| rejection.code == RejectCode::WrongSeason)
+            && rejections.iter().all(|rejection| {
+                matches!(
+                    rejection.code,
+                    RejectCode::WrongSeason
+                        | RejectCode::WrongEpisode
+                        | RejectCode::SeasonPackNotAllowed
+                        | RejectCode::AmbiguousNumbering
+                )
+            })
+    }
 }
 
 pub struct DecisionEngine;
@@ -553,6 +570,7 @@ mod tests {
 
     fn episode_target(season: u32, episode: u32) -> MediaTarget {
         MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 1,
             titles: vec!["Example Show".into()],
             year: Some(2024),
@@ -637,6 +655,7 @@ mod tests {
         assert!(codes(&denied).contains(&RejectCode::SeasonPackNotAllowed));
 
         let allowed_target = MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 1,
             titles: vec!["Example Show".into()],
             year: Some(2024),
@@ -687,6 +706,7 @@ mod tests {
     #[test]
     fn anime_absolute_and_mapped_numbering_are_distinct() {
         let target = MediaTarget::Anime {
+            numbering: Vec::new(),
             tmdb_id: 2,
             titles: vec!["One Piece".into()],
             year: None,
@@ -704,6 +724,7 @@ mod tests {
         assert!(DecisionEngine::evaluate(&target, &mapped, &profile(), 10).accepted);
 
         let ambiguous_target = MediaTarget::Anime {
+            numbering: Vec::new(),
             tmdb_id: 2,
             titles: vec!["One Piece".into()],
             year: None,
@@ -738,6 +759,7 @@ mod tests {
     #[test]
     fn probe_matches_episode_titles_that_carry_a_release_year() {
         let target = MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 1,
             titles: vec!["The Silent Storm".into()],
             year: None,
@@ -752,6 +774,7 @@ mod tests {
 
     fn silent_storm_target(episode: u32) -> MediaTarget {
         MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 279155,
             titles: vec!["谷雨".into(), "The Silent Storm".into()],
             year: Some(2026),
@@ -805,5 +828,41 @@ mod tests {
         let decision =
             DecisionEngine::evaluate(&silent_storm_target(1), &published_last_december, &profile(), 100);
         assert!(!codes(&decision).contains(&RejectCode::WrongYear));
+    }
+
+    fn luoxiaohei_target(numbering: Vec<crate::media::domain::numbering::NumberingRule>) -> MediaTarget {
+        MediaTarget::Episode {
+            tmdb_id: 88319,
+            titles: vec!["罗小黑战记".into(), "The Legend of LUOXIAOHEI".into()],
+            year: Some(2011),
+            season: 1,
+            episode: 42,
+            allow_season_pack: false,
+            numbering,
+        }
+    }
+
+    #[test]
+    fn numbering_rule_maps_site_season_before_identity_checks() {
+        use crate::media::domain::numbering::{self, NumberingRule};
+
+        let title = "The Legend of LUOXIAOHEI 2011 S03E02 4K Bilibili WEB-DL H.264 AAC";
+        let plain = luoxiaohei_target(Vec::new());
+        let release = parse(title);
+        assert!(!IdentityGate::matches_series(&plain, &release));
+        assert!(IdentityGate::differs_only_by_season(&plain, &release));
+
+        let rules = vec![NumberingRule {
+            keyword: Some("LUOXIAOHEI".into()),
+            source_season: 3,
+            target_season: 1,
+            episode_offset: 40,
+        }];
+        let mapped_target = luoxiaohei_target(rules.clone());
+        let mut mapped = parse(title);
+        assert!(numbering::apply(&rules, &mut mapped, None));
+        let decision = DecisionEngine::evaluate(&mapped_target, &mapped, &QualityProfile::default(), 5);
+        assert!(decision.accepted, "{:?}", decision.rejections);
+        assert!(!IdentityGate::differs_only_by_season(&mapped_target, &mapped));
     }
 }

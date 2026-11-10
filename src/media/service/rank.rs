@@ -1045,6 +1045,7 @@ impl MediaService {
                     },
                     enabled: true,
                     group_policy: Default::default(),
+                    numbering: Vec::new(),
                 };
                 match self.create_subscription(&request).await {
                     Ok(subscription) => {

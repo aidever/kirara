@@ -1,4 +1,5 @@
 use super::domain::group::GroupPolicy;
+use super::domain::numbering::NumberingRule;
 use super::tmdb::TmdbGenre;
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +91,9 @@ pub struct SubscriptionRecord {
     pub quality_profile_id: i64,
     #[serde(default)]
     pub group_policy: GroupPolicy,
+    /// 站点编号与 TMDB 不一致时的换算规则。
+    #[serde(default)]
+    pub numbering: Vec<NumberingRule>,
     pub downloader_id: i64,
     pub site_ids: Vec<i64>,
     pub save_path: Option<String>,
@@ -123,6 +127,8 @@ pub struct NewSubscription {
     pub quality_profile_id: i64,
     #[serde(default)]
     pub group_policy: GroupPolicy,
+    #[serde(default)]
+    pub numbering: Vec<NumberingRule>,
     pub downloader_id: i64,
     #[serde(default)]
     pub site_ids: Vec<i64>,
@@ -140,6 +146,9 @@ pub struct UpdateSubscription {
     /// 缺省时保留原有制作组策略。
     #[serde(default)]
     pub group_policy: Option<GroupPolicy>,
+    /// 缺省时保留原有编号映射。
+    #[serde(default)]
+    pub numbering: Option<Vec<NumberingRule>>,
     pub downloader_id: i64,
     #[serde(default)]
     pub site_ids: Vec<i64>,

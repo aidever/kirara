@@ -351,6 +351,7 @@ mod tests {
             total_episodes: None,
             subtitle_year: None,
             published_year: None,
+            numbering_note: None,
         }
     }
 

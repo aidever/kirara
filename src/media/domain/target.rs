@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::numbering::NumberingRule;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
@@ -30,6 +32,9 @@ pub enum MediaTarget {
         episode: u32,
         #[serde(default)]
         allow_season_pack: bool,
+        /// 站点编号与 TMDB 不一致时的换算规则。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        numbering: Vec<NumberingRule>,
     },
     Anime {
         tmdb_id: i64,
@@ -37,6 +42,8 @@ pub enum MediaTarget {
         year: Option<u32>,
         absolute_episode: u32,
         season_episode: Option<SeasonEpisode>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        numbering: Vec<NumberingRule>,
     },
     Season {
         tmdb_id: i64,
@@ -82,6 +89,13 @@ impl MediaTarget {
         }
     }
 
+    pub fn numbering(&self) -> &[NumberingRule] {
+        match self {
+            Self::Episode { numbering, .. } | Self::Anime { numbering, .. } => numbering,
+            Self::Movie { .. } | Self::Season { .. } => &[],
+        }
+    }
+
     pub fn target_key(&self) -> String {
         match self {
             Self::Movie { tmdb_id, .. } => format!("movie:{tmdb_id}"),
@@ -110,6 +124,7 @@ mod tests {
     #[test]
     fn target_keys_are_canonical_and_non_empty() {
         let episode = MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 42,
             titles: vec!["Example".into()],
             year: None,
@@ -118,6 +133,7 @@ mod tests {
             allow_season_pack: false,
         };
         let anime = MediaTarget::Anime {
+            numbering: Vec::new(),
             tmdb_id: 7,
             titles: vec!["Example".into()],
             year: None,

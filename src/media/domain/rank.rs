@@ -259,6 +259,7 @@ mod tests {
 
     fn target() -> MediaTarget {
         MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 1,
             titles: vec!["Example Show".into()],
             year: Some(2026),

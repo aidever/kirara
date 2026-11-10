@@ -43,6 +43,9 @@ pub struct ReleaseInfo {
     /// 种子在站点上的发布年份。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_year: Option<u32>,
+    /// 按订阅的编号映射换算过时的说明，如 `S03E02 → S01E42`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Error)]
@@ -217,6 +220,7 @@ impl ReleaseParser {
             total_episodes,
             subtitle_year: None,
             published_year: None,
+            numbering_note: None,
         })
     }
 

@@ -575,8 +575,8 @@ impl Database {
                  (tmdb_id, media_type, tmdb_is_animation, tmdb_genres_json, title, original_title, aliases_json, year,
                   poster_path, season, next_episode, start_episode, absolute_episode,
                   quality_profile_id, downloader_id, save_path, enabled, next_run_at,
-                  last_status, created_at, updated_at, group_policy_json)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  last_status, created_at, updated_at, group_policy_json, numbering_json)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     request.tmdb_id,
                     request.media_type,
@@ -600,6 +600,7 @@ impl Database {
                     now,
                     now,
                     json_string(&request.group_policy)?,
+                    json_string(&request.numbering)?,
                 ],
             )
             .map_err(sql_error)?;
@@ -772,7 +773,8 @@ impl Database {
                 .execute(
                     "UPDATE subscriptions
                      SET season = ?, next_episode = ?, start_episode = ?, absolute_episode = ?,
-                         quality_profile_id = ?, group_policy_json = ?, downloader_id = ?, save_path = ?,
+                         quality_profile_id = ?, group_policy_json = ?, numbering_json = ?,
+                         downloader_id = ?, save_path = ?,
                          enabled = ?, next_run_at = ?, lease_owner = NULL,
                          lease_until = NULL, last_status = ?, last_error = NULL,
                          version = version + 1, updated_at = ?
@@ -785,6 +787,7 @@ impl Database {
                         request.absolute_episode,
                         request.quality_profile_id,
                         json_string(request.group_policy.as_ref().unwrap_or(&current.group_policy))?,
+                        json_string(request.numbering.as_ref().unwrap_or(&current.numbering))?,
                         request.downloader_id,
                         clean_optional(request.save_path),
                         request.enabled as i32,
@@ -3064,7 +3067,7 @@ const SUBSCRIPTION_SELECT: &str =
             poster_path, season, next_episode, start_episode, absolute_episode,
             quality_profile_id, downloader_id, save_path, enabled, next_run_at,
             lease_owner, lease_until, version, last_status, last_error, last_run_at,
-            created_at, updated_at, group_policy_json FROM subscriptions";
+            created_at, updated_at, group_policy_json, numbering_json FROM subscriptions";
 
 const MEDIA_DOWNLOAD_SELECT: &str =
     "SELECT id, subscription_id, target_key, dedupe_key, site_id, downloader_id,
@@ -3162,6 +3165,11 @@ fn map_subscription(row: &Row<'_>) -> rusqlite::Result<SubscriptionRecord> {
         // 策略列无法解析时退回默认值，不让单个订阅阻塞整个列表。
         group_policy: row
             .get::<_, String>(27)
+            .ok()
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default(),
+        numbering: row
+            .get::<_, String>(28)
             .ok()
             .and_then(|value| serde_json::from_str(&value).ok())
             .unwrap_or_default(),
@@ -4237,6 +4245,7 @@ mod tests {
         downloader_id: i64,
     ) -> SubscriptionRecord {
         db.create_subscription(&NewSubscription {
+            numbering: Vec::new(),
             group_policy: Default::default(),
             tmdb_id: 42,
             media_type: "tv".to_string(),
@@ -4268,6 +4277,7 @@ mod tests {
         downloader_id: i64,
     ) -> NewSubscription {
         NewSubscription {
+            numbering: Vec::new(),
             group_policy: Default::default(),
             tmdb_id,
             media_type: "tv".to_string(),
@@ -5338,6 +5348,7 @@ mod tests {
                 edit_wins.id,
                 stale_claim.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(4),
@@ -5421,6 +5432,7 @@ mod tests {
                 enqueue_wins.id,
                 live_claim.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(4),
@@ -5691,6 +5703,7 @@ mod tests {
     async fn materialized_terminal_season_advances_by_air_date_then_completes() {
         let (_dir, db, site_id, downloader_id) = database_with_media_references().await;
         let request = NewSubscription {
+            numbering: Vec::new(),
             group_policy: Default::default(),
             tmdb_id: 77,
             media_type: "tv".to_string(),
@@ -5784,6 +5797,7 @@ mod tests {
         let (_dir, db, site_id, downloader_id) = database_with_media_references().await;
         let movie = db
             .create_subscription(&NewSubscription {
+                numbering: Vec::new(),
                 group_policy: Default::default(),
                 tmdb_id: 107,
                 media_type: "movie".to_string(),
@@ -5822,6 +5836,7 @@ mod tests {
                 movie.id,
                 completed.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: None,
                     next_episode: None,
@@ -5918,6 +5933,7 @@ mod tests {
         assert_eq!(renewed_version, claimed.version + 1);
 
         let update = UpdateSubscription {
+            numbering: None,
             group_policy: Default::default(),
             season: Some(1),
             next_episode: Some(9),
@@ -5987,6 +6003,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(9),
@@ -6061,6 +6078,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(9),
@@ -6096,6 +6114,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(9),
@@ -6218,6 +6237,7 @@ mod tests {
                 created.id,
                 current.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(1),
@@ -6762,6 +6782,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(3),
@@ -6981,6 +7002,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(3),
@@ -7079,6 +7101,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: created.next_episode,
@@ -7252,6 +7275,7 @@ mod tests {
                 created.id,
                 created.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(2),
                     next_episode: Some(1),
@@ -7283,6 +7307,7 @@ mod tests {
                 created.id,
                 moved.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(1),
                     next_episode: Some(6),
@@ -7312,6 +7337,7 @@ mod tests {
                 created.id,
                 moved.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(2),
                     next_episode: Some(1),
@@ -7342,6 +7368,7 @@ mod tests {
                 created.id,
                 rules_only.version,
                 &UpdateSubscription {
+                    numbering: None,
                     group_policy: Default::default(),
                     season: Some(2),
                     next_episode: Some(2),
@@ -8153,5 +8180,48 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn subscription_numbering_rules_round_trip_and_survive_partial_updates() {
+        use crate::media::domain::numbering::NumberingRule;
+
+        let (_dir, db, site_id, downloader_id) = database_with_media_references().await;
+        let rule = NumberingRule {
+            keyword: Some("LUOXIAOHEI".into()),
+            source_season: 3,
+            target_season: 1,
+            episode_offset: 40,
+        };
+        let mut request = test_tv_subscription_request(88319, 1, 41, site_id, downloader_id);
+        request.numbering = vec![rule.clone()];
+        let created = db.create_subscription(&request).await.unwrap();
+        assert_eq!(created.numbering, vec![rule.clone()]);
+
+        let update = |numbering| UpdateSubscription {
+            numbering,
+            group_policy: None,
+            season: Some(1),
+            next_episode: Some(41),
+            absolute_episode: None,
+            quality_profile_id: 1,
+            downloader_id,
+            site_ids: vec![site_id],
+            save_path: None,
+            enabled: true,
+            reset_download_history: false,
+        };
+        let kept = db
+            .update_subscription(created.id, created.version, &update(None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.numbering, vec![rule]);
+        let cleared = db
+            .update_subscription(kept.id, kept.version, &update(Some(Vec::new())))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.numbering.is_empty());
     }
 }

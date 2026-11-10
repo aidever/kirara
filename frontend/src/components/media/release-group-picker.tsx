@@ -1,8 +1,15 @@
-import { useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, ExternalLink, LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  NumberingRulesEditor,
+  SeasonMismatchList,
+  cleanNumbering,
+  type NumberingRule,
+  type SeasonMismatchSummary,
+} from "@/components/media/numbering-rules";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +71,8 @@ export type ProbeTorrent = {
   full_season: boolean;
   total_episodes?: number | null;
   source?: string | null;
+  /** 经编号映射换算时的说明，如 `S03E02 → S01E42`。 */
+  numbering_note?: string | null;
 };
 
 export type ReleaseVariantSummary = {
@@ -107,9 +116,12 @@ export type ReleaseGroupSummary = {
 };
 
 type ProbeResponse = {
+  probe_id?: string | null;
   queries: string[];
   matched: number;
+  mapped?: number;
   groups: ReleaseGroupSummary[];
+  season_mismatches?: SeasonMismatchSummary<ProbeTorrent>[];
   errors: Array<{ source_site: string; message: string }>;
   total_sites: number;
   successful_sites: number;
@@ -417,6 +429,7 @@ function TorrentList({ torrents, absoluteNumbering, isMovie }: { torrents: Probe
               <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-secondary-foreground">
                 <span className="font-semibold">{result.source_site}</span>
                 {episodes ? <span className="font-mono">{episodes}</span> : null}
+                {torrent.numbering_note ? <span className="rounded bg-[#e3f0ec] px-1.5 font-mono text-[#2b5e51]" title="按编号映射换算">{torrent.numbering_note}</span> : null}
                 {torrent.source ? <span>{torrent.source}</span> : null}
                 <span>{formatSize(result.size)}</span>
                 <span title="做种 / 下载">↑{result.seeders} ↓{result.leechers}</span>
@@ -474,6 +487,8 @@ type PickerProps = {
   siteIds: number[];
   policy: GroupPolicy;
   onChange: (policy: GroupPolicy) => void;
+  numbering: NumberingRule[];
+  onNumberingChange: (rules: NumberingRule[]) => void;
   qualityProfileName?: string;
 };
 
@@ -487,6 +502,8 @@ export function ReleaseGroupPicker({
   siteIds,
   policy,
   onChange,
+  numbering,
+  onNumberingChange,
   qualityProfileName,
 }: PickerProps) {
   const idPrefix = useId();
@@ -498,7 +515,13 @@ export function ReleaseGroupPicker({
   const [showUnknown, setShowUnknown] = useState(false);
   const [openTorrents, setOpenTorrents] = useState<Set<string>>(() => new Set());
   const [advancedOpen, setAdvancedOpen] = useState(policy.include.length > 0 || policy.exclude.length > 0);
+  const [numberingOpen, setNumberingOpen] = useState(numbering.length > 0);
+  const [regroupStatus, setRegroupStatus] = useState("");
   const requestRef = useRef(0);
+  const numberingKey = JSON.stringify(cleanNumbering(numbering));
+  const numberingRef = useRef(numberingKey);
+  numberingRef.current = numberingKey;
+  const [probedNumbering, setProbedNumbering] = useState(numberingKey);
   const siteKey = siteIds.join(",");
   const isMovie = mediaType === "movie";
 
@@ -508,6 +531,7 @@ export function ReleaseGroupPicker({
       return;
     }
     const request = ++requestRef.current;
+    const sentNumbering = numberingRef.current;
     setProbing(true);
     setProbeError("");
     try {
@@ -519,10 +543,13 @@ export function ReleaseGroupPicker({
           season: isMovie ? null : season,
           absolute_numbering: absoluteNumbering,
           site_ids: siteIds,
+          numbering: JSON.parse(sentNumbering) as NumberingRule[],
         }),
       });
       if (request === requestRef.current) {
         setProbe(response);
+        setProbedNumbering(sentNumbering);
+        setRegroupStatus("");
         setOpenTorrents(new Set());
       }
     } catch (error) {
@@ -544,6 +571,47 @@ export function ReleaseGroupPicker({
     void runProbe();
   }, [probeKey, runProbe]);
   const stale = probe !== null && probedKey !== probeKey;
+  const probeId = probe?.probe_id ?? null;
+
+  // 修改编号映射后用缓存的探测结果重新归类，不重新逐站搜索。
+  useEffect(() => {
+    if (!probeId || stale || probing || numberingKey === probedNumbering) return;
+    const timer = window.setTimeout(async () => {
+      const request = ++requestRef.current;
+      setRegroupStatus("正在按新的映射重新归类…");
+      try {
+        const response = await api<ProbeResponse>("/api/media/release-groups/regroup", {
+          method: "POST",
+          body: JSON.stringify({ probe_id: probeId, numbering: JSON.parse(numberingKey) as NumberingRule[] }),
+        });
+        if (request === requestRef.current) {
+          setProbe(response);
+          setProbedNumbering(numberingKey);
+          setRegroupStatus(response.mapped ? `已按映射归入 ${response.mapped} 条资源。` : "已重新归类，没有资源命中映射。");
+        }
+      } catch (error) {
+        if (request !== requestRef.current) return;
+        if (error instanceof ApiError && error.status === 404) {
+          setRegroupStatus("探测结果已过期，请重新探测查看映射效果。");
+          setProbedNumbering(numberingKey);
+        } else {
+          setRegroupStatus(error instanceof Error ? `重新归类失败：${error.message}` : "重新归类失败");
+        }
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [probeId, stale, probing, numberingKey, probedNumbering]);
+
+  const mismatches = useMemo(() => probe?.season_mismatches ?? [], [probe]);
+  const targetSeason = season ?? 1;
+  const mapSeason = (sourceSeason: number) => {
+    onNumberingChange([...numbering, { keyword: null, source_season: sourceSeason, target_season: targetSeason, episode_offset: 0 }]);
+    setNumberingOpen(true);
+  };
+  const sampleEpisode = useMemo(() => {
+    const episodes = mismatches.flatMap((mismatch) => mismatch.episodes);
+    return episodes.length > 0 ? Math.max(...episodes) : null;
+  }, [mismatches]);
 
   const named = useMemo(() => (probe?.groups ?? []).filter((group) => group.name), [probe]);
   const unknown = useMemo(() => (probe?.groups ?? []).find((group) => !group.name) ?? null, [probe]);
@@ -671,7 +739,7 @@ export function ReleaseGroupPicker({
               {probing
                 ? "正在各站点搜索并按制作组、画质归类…"
                 : probe
-                  ? `在 ${probe.successful_sites}/${probe.total_sites} 个站点找到 ${probe.matched} 条资源，归为 ${named.length} 个制作组、${allVariants.length} 个版本 · ${formatRelative(probe.probed_at)}`
+                  ? `在 ${probe.successful_sites}/${probe.total_sites} 个站点找到 ${probe.matched} 条资源${probe.mapped ? `（其中 ${probe.mapped} 条经编号映射）` : ""}，归为 ${named.length} 个制作组、${allVariants.length} 个版本 · ${formatRelative(probe.probed_at)}`
                   : siteIds.length === 0
                     ? "先在上方选择站点，再点击「探测制作组」。"
                     : `选好站点后点击「探测制作组」，将在已选的 ${siteIds.length} 个站点搜索并按制作组、画质归类。`}
@@ -716,7 +784,9 @@ export function ReleaseGroupPicker({
         ) : null}
         {probe && named.length === 0 && !probing ? (
           <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted">
-            暂时没有找到可识别制作组的资源。可以在右侧手动填写制作组名称，或不选制作组、按质量配置追更。
+            {mismatches.length > 0
+              ? "没有找到季号对得上的资源，但有同名资源用了别的季号，见下方。确认是同一季后可以设置编号映射。"
+              : "暂时没有找到可识别制作组的资源。可以在右侧手动填写制作组名称，或不选制作组、按质量配置追更。"}
           </div>
         ) : null}
         {probe && named.length > 0 && visible.length === 0 ? (
@@ -862,6 +932,35 @@ export function ReleaseGroupPicker({
               </div>
             ) : null}
           </div>
+        ) : null}
+
+        {!isMovie ? (
+          <>
+            <SeasonMismatchList
+              mismatches={mismatches}
+              season={targetSeason}
+              rules={numbering}
+              onMap={mapSeason}
+              renderTorrents={(torrents) => <TorrentList torrents={torrents} absoluteNumbering={false} isMovie={false} />}
+            />
+            {numberingOpen || numbering.length > 0 ? (
+              <NumberingRulesEditor
+                rules={numbering}
+                onChange={onNumberingChange}
+                season={targetSeason}
+                sampleEpisode={sampleEpisode}
+                status={regroupStatus || (numbering.length > 0 && !probe ? "探测后可以看到映射命中了哪些种子。" : undefined)}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setNumberingOpen(true)}
+                className="min-h-8 self-start rounded-md px-2 text-xs font-medium text-primary hover:bg-accent"
+              >
+                站点季号和 TMDB 不一致？设置编号映射
+              </button>
+            )}
+          </>
         ) : null}
       </section>
 

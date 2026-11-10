@@ -32,6 +32,7 @@ use crate::downloader::DownloaderSpaceStats;
 use crate::downloader::{DownloaderClient, DownloaderClientPool};
 use crate::error::AppError;
 use crate::indexer::IndexerError;
+use crate::media::domain::numbering::{NumberingRule, normalize_rules};
 use crate::media::domain::{MediaTarget, ReleaseInfo, ReleaseParser};
 use crate::media::models::MediaGroupUpgradeRecord;
 use crate::media::models::{
@@ -42,6 +43,7 @@ use crate::media::scheduler::MediaScheduler;
 use crate::media::service::{
     CreateSubscriptionRequest, FailedDownloadReconciliation, MediaService, MediaServiceError,
     QueueDownloadRequest, ReleaseGroupProbeRequest, ReleaseGroupProbeResponse,
+    ReleaseGroupRegroupRequest,
     ResourceSearchRequest, ResourceSearchResponse, SubscriptionRunResult, SubscriptionRunSnapshot,
 };
 use crate::media::tmdb::{TmdbDetails, TmdbError, TmdbMedia, TmdbMediaType, TmdbSeason};
@@ -487,6 +489,7 @@ fn media_router(
         )
         .route("/resources/search", post(search_media_resources))
         .route("/release-groups/probe", post(probe_release_groups))
+        .route("/release-groups/regroup", post(regroup_release_groups))
         .route(
             "/subscriptions/{id}/group-upgrades",
             get(list_subscription_group_upgrades),
@@ -2082,6 +2085,7 @@ async fn probe_release_groups(
     if payload.site_ids.is_empty() {
         return Err(ApiError::bad_request("site_ids must not be empty"));
     }
+    payload.numbering = validated_numbering(std::mem::take(&mut payload.numbering))?;
     Ok(Json(
         state
             .service
@@ -2089,6 +2093,29 @@ async fn probe_release_groups(
             .await
             .map_err(ApiError::from)?,
     ))
+}
+
+/// 用缓存的探测结果按新的编号映射重新归类，不重新搜索站点。
+async fn regroup_release_groups(
+    State(state): State<MediaApiState>,
+    Json(mut payload): Json<ReleaseGroupRegroupRequest>,
+) -> Result<Json<ReleaseGroupProbeResponse>, ApiError> {
+    payload.probe_id = payload.probe_id.trim().to_string();
+    if payload.probe_id.is_empty() || payload.probe_id.len() > 128 {
+        return Err(ApiError::bad_request("probe_id is invalid"));
+    }
+    payload.numbering = validated_numbering(std::mem::take(&mut payload.numbering))?;
+    Ok(Json(
+        state
+            .service
+            .regroup_release_probe(&payload)
+            .await
+            .map_err(ApiError::from)?,
+    ))
+}
+
+fn validated_numbering(rules: Vec<NumberingRule>) -> Result<Vec<NumberingRule>, ApiError> {
+    normalize_rules(rules).map_err(ApiError::bad_request)
 }
 
 async fn list_subscription_group_upgrades(
@@ -2470,6 +2497,7 @@ fn normalize_and_validate_new_subscription(
     payload.group_policy = std::mem::take(&mut payload.group_policy)
         .normalized()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    payload.numbering = validated_numbering(std::mem::take(&mut payload.numbering))?;
     if payload.start_episode == Some(0) || payload.absolute_episode == Some(0) {
         return Err(ApiError::bad_request(
             "episode numbers must be greater than zero",
@@ -2506,6 +2534,9 @@ fn normalize_and_validate_subscription_update(
                 .normalized()
                 .map_err(|error| ApiError::bad_request(error.to_string()))?,
         );
+    }
+    if let Some(numbering) = payload.numbering.take() {
+        payload.numbering = Some(validated_numbering(numbering)?);
     }
     if payload.next_episode == Some(0) || payload.absolute_episode == Some(0) {
         return Err(ApiError::bad_request(
@@ -6223,6 +6254,7 @@ mod media_api_tests {
 
     fn subscription_with_status(status: Option<&str>) -> SubscriptionRecord {
         SubscriptionRecord {
+            numbering: Vec::new(),
             group_policy: Default::default(),
             id: 1,
             tmdb_id: 42,

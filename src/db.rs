@@ -3170,6 +3170,8 @@ impl Database {
             }
             ensure_column(&conn, "subscriptions", "group_policy_json",
                 "ALTER TABLE subscriptions ADD COLUMN group_policy_json TEXT NOT NULL DEFAULT '{}'")?;
+            ensure_column(&conn, "subscriptions", "numbering_json",
+                "ALTER TABLE subscriptions ADD COLUMN numbering_json TEXT NOT NULL DEFAULT '[]'")?;
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS media_group_upgrades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

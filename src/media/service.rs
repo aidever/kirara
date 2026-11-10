@@ -18,6 +18,7 @@ use super::domain::group::{
     self as group_policy, CandidateGroupInfo, GroupCandidate, GroupPolicy, GroupSelection,
     ReleaseTraits,
 };
+use super::domain::numbering::{self, NumberingRule};
 use super::domain::{
     DecisionEngine, IdentityGate, MatchDecision, MediaTarget, QualityProfile, QueryGenerator,
     RejectCode, ReleaseInfo, ReleaseParser, SearchCriteria, SeasonEpisode, SortKey,
@@ -129,6 +130,8 @@ pub struct CreateSubscriptionRequest {
     pub enabled: bool,
     #[serde(default)]
     pub group_policy: GroupPolicy,
+    #[serde(default)]
+    pub numbering: Vec<NumberingRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +184,9 @@ pub struct ReleaseGroupProbeRequest {
     pub absolute_numbering: bool,
     #[serde(default)]
     pub site_ids: Vec<i64>,
+    /// 当前草稿里的编号映射，探测时按它换算站点编号。
+    #[serde(default)]
+    pub numbering: Vec<NumberingRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,17 +255,141 @@ pub struct ProbeTorrent {
     pub full_season: bool,
     pub total_episodes: Option<u32>,
     pub source: Option<String>,
+    /// 经编号映射换算时的说明，如 `S03E02 → S01E42`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering_note: Option<String>,
+    /// 解析出的季号（换算后）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season: Option<u32>,
+}
+
+impl ProbeTorrent {
+    fn of(result: &SearchResult, release: &ReleaseInfo) -> Self {
+        Self {
+            result: result.clone(),
+            episodes: release.episodes.clone(),
+            absolute_episodes: release.absolute_episodes.clone(),
+            full_season: release.full_season,
+            total_episodes: release.total_episodes,
+            source: release.source.clone(),
+            numbering_note: release.numbering_note.clone(),
+            season: release.season,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseGroupProbeResponse {
+    /// 本次探测结果的缓存编号，修改编号映射后用它重新归类。
+    pub probe_id: Option<String>,
     pub queries: Vec<String>,
     pub matched: usize,
+    /// 经编号映射换算后归入结果的资源数。
+    pub mapped: usize,
     pub groups: Vec<ReleaseGroupSummary>,
+    /// 标题、年份都对得上，只有季号与目标不同的资源，按站点季号分组。
+    pub season_mismatches: Vec<SeasonMismatchSummary>,
     pub errors: Vec<SiteSearchError>,
     pub total_sites: usize,
     pub successful_sites: usize,
     pub probed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseGroupRegroupRequest {
+    pub probe_id: String,
+    #[serde(default)]
+    pub numbering: Vec<NumberingRule>,
+}
+
+/// 站点上某个季号下、与目标季号不符的资源。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeasonMismatchSummary {
+    /// 站点标题里的季号。
+    pub season: u32,
+    pub count: usize,
+    pub episodes: Vec<u32>,
+    pub groups: Vec<String>,
+    pub sites: Vec<String>,
+    pub latest_publish: Option<chrono::DateTime<Utc>>,
+    /// 最新发布的若干条种子，供核对是哪一集。
+    pub torrents: Vec<ProbeTorrent>,
+}
+
+const SEASON_MISMATCH_TORRENT_LIMIT: usize = 20;
+
+impl SeasonMismatchSummary {
+    fn of(season: u32, items: &[(SearchResult, ReleaseInfo)]) -> Self {
+        let stats = ProbeStats::of(items.iter());
+        let mut groups = Vec::new();
+        for (_, release) in items {
+            push_unique(&mut groups, release.release_group.as_deref());
+        }
+        let mut torrents: Vec<ProbeTorrent> = items
+            .iter()
+            .map(|(result, release)| ProbeTorrent::of(result, release))
+            .collect();
+        torrents.sort_by(|left, right| right.result.publish_time.cmp(&left.result.publish_time));
+        torrents.truncate(SEASON_MISMATCH_TORRENT_LIMIT);
+        Self {
+            season,
+            count: items.len(),
+            episodes: stats.episodes,
+            groups,
+            sites: stats.sites,
+            latest_publish: stats.latest.map(|(time, _)| time),
+            torrents,
+        }
+    }
+}
+
+/// 一次探测的原始搜索结果，供修改编号映射后重新归类。
+#[derive(Clone)]
+struct ProbeSnapshot {
+    media_type: TmdbMediaType,
+    tmdb_id: i64,
+    titles: Vec<String>,
+    year: Option<u32>,
+    season: Option<u32>,
+    absolute_numbering: bool,
+    queries: Vec<String>,
+    results: Vec<SearchResult>,
+    errors: Vec<SiteSearchError>,
+    total_sites: usize,
+    successful_sites: usize,
+    probed_at: String,
+}
+
+const PROBE_CACHE_TTL: StdDuration = StdDuration::from_secs(30 * 60);
+const PROBE_CACHE_CAPACITY: usize = 16;
+
+#[derive(Default)]
+struct ProbeCache {
+    entries: VecDeque<(String, Instant, ProbeSnapshot)>,
+}
+
+impl ProbeCache {
+    fn insert(&mut self, probe_id: String, snapshot: ProbeSnapshot) {
+        self.prune_expired();
+        while self.entries.len() >= PROBE_CACHE_CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries
+            .push_back((probe_id, Instant::now() + PROBE_CACHE_TTL, snapshot));
+    }
+
+    fn get(&mut self, probe_id: &str) -> Option<ProbeSnapshot> {
+        self.prune_expired();
+        self.entries
+            .iter()
+            .find(|(id, _, _)| id == probe_id)
+            .map(|(_, _, snapshot)| snapshot.clone())
+    }
+
+    fn prune_expired(&mut self) {
+        let now = Instant::now();
+        self.entries.retain(|(_, expires_at, _)| *expires_at > now);
+    }
 }
 
 struct ReleaseGroupBucket {
@@ -419,14 +549,7 @@ impl ReleaseGroupBucket {
                 let stats = ProbeStats::of(items.iter().copied());
                 let mut torrents: Vec<ProbeTorrent> = items
                     .iter()
-                    .map(|(result, release)| ProbeTorrent {
-                        result: result.clone(),
-                        episodes: release.episodes.clone(),
-                        absolute_episodes: release.absolute_episodes.clone(),
-                        full_season: release.full_season,
-                        total_episodes: release.total_episodes,
-                        source: release.source.clone(),
-                    })
+                    .map(|(result, release)| ProbeTorrent::of(result, release))
                     .collect();
                 torrents.sort_by(|left, right| {
                     right
@@ -513,6 +636,7 @@ pub struct MediaService {
     downloaders: Arc<DownloaderClientPool>,
     parser: ReleaseParser,
     candidate_cache: Arc<tokio::sync::Mutex<CandidateCache>>,
+    probe_cache: Arc<tokio::sync::Mutex<ProbeCache>>,
     maoyan: Arc<MaoyanStore>,
     global_rank: Arc<GlobalRankStore>,
 }
@@ -596,6 +720,7 @@ impl MediaService {
             downloaders,
             parser: ReleaseParser::default(),
             candidate_cache: Arc::new(tokio::sync::Mutex::new(CandidateCache::default())),
+            probe_cache: Arc::new(tokio::sync::Mutex::new(ProbeCache::default())),
             maoyan: Arc::new(MaoyanStore::default()),
             global_rank: Arc::new(GlobalRankStore::default()),
         })
@@ -1094,6 +1219,7 @@ impl MediaService {
             save_path: request.save_path.clone(),
             enabled: request.enabled,
             group_policy: request.group_policy.clone(),
+            numbering: request.numbering.clone(),
         };
         if let Some(plan) = target_plan {
             let settings = self.db.get_media_settings().await?;
@@ -1178,8 +1304,21 @@ impl MediaService {
         } else if let Some(target) = &request.target {
             let plan = QueryGenerator::new(media_settings.max_search_queries)
                 .generate_plan(&SearchCriteria::from(target));
+            let mut primary: Vec<String> =
+                plan.primary.into_iter().map(|query| query.query).collect();
+            // 站点用自己的季/集编号发种时，按站点编号搜索才能命中，这些搜索词排在最前。
+            let budget = primary.len();
+            let mut mapped = site_numbering_queries(target);
+            if !mapped.is_empty() {
+                mapped.truncate(budget.max(1));
+                for query in primary {
+                    push_case_insensitive(&mut mapped, &query);
+                }
+                mapped.truncate(budget.max(1));
+                primary = mapped;
+            }
             (
-                plan.primary.into_iter().map(|query| query.query).collect(),
+                primary,
                 plan.fallback.into_iter().map(|query| query.query).collect(),
             )
         } else {
@@ -1253,7 +1392,7 @@ impl MediaService {
     ) -> bool {
         let profile = profile_to_domain(profile);
         results.iter().any(|result| {
-            self.parse_result(&result)
+            self.parse_result(result, target.numbering())
                 .is_ok_and(|release| {
                     DecisionEngine::evaluate(target, &release, &profile, result.seeders).accepted
                 })
@@ -1270,8 +1409,9 @@ impl MediaService {
     ) -> Result<Vec<ResourceCandidate>, MediaServiceError> {
         let domain_profile = profile.map(profile_to_domain);
         let mut candidates = Vec::with_capacity(results.len().min(RESOURCE_SEARCH_RESULT_LIMIT));
+        let numbering = request.target.as_ref().map_or(&[][..], MediaTarget::numbering);
         for result in results {
-            match self.parse_result(&result)
+            match self.parse_result(&result, numbering)
             {
                 Ok(release) => {
                     let decision = request.target.as_ref().zip(domain_profile.as_ref()).map(
@@ -2169,7 +2309,7 @@ impl MediaService {
                         subscription.quality_profile_id
                     ))
                 })?;
-            let release = self.parse_result(&result)
+            let release = self.parse_result(&result, target.numbering())
                 .map_err(|error| {
                     MediaServiceError::Invalid(format!(
                         "release title could not be matched to the subscription: {error}"
@@ -2215,7 +2355,7 @@ impl MediaService {
                             request.quality_profile_id
                         ))
                     })?;
-                let release = self.parse_result(&result)
+                let release = self.parse_result(&result, target.numbering())
                     .map_err(|error| {
                         MediaServiceError::Invalid(format!(
                             "release title could not be matched to the search target: {error}"
@@ -2976,18 +3116,24 @@ impl MediaService {
     }
 
     /// 解析搜索结果：标题为主，副标题补充集数与年份，并记下发布年份。
+    /// 解析搜索结果；订阅配置了编号映射时，把站点编号换算成 TMDB 编号。
     fn parse_result(
         &self,
         result: &SearchResult,
+        numbering: &[NumberingRule],
     ) -> Result<crate::media::domain::release::ReleaseInfo, crate::media::domain::release::ReleaseParseError> {
         let mut release = self
             .parser
             .parse_with_subtitle(&result.title, result.subtitle.as_deref())?;
         release.published_year = result.publish_time.map(|time| time.year() as u32);
+        numbering::apply(numbering, &mut release, result.subtitle.as_deref());
         Ok(release)
     }
 
     /// 探测某部剧在所选站点上有哪些制作组的资源，供创建订阅时挑选。
+    ///
+    /// 原始搜索结果会缓存一段时间，修改编号映射后可用 [`Self::regroup_release_probe`]
+    /// 直接重新归类，不必再逐站搜索。
     pub async fn probe_release_groups(
         &self,
         request: &ReleaseGroupProbeRequest,
@@ -3008,32 +3154,6 @@ impl MediaService {
         for alias in &details.aliases {
             push_case_insensitive(&mut titles, alias);
         }
-        let target = if media_type == TmdbMediaType::Movie {
-            MediaTarget::Movie {
-                tmdb_id: request.tmdb_id,
-                titles: titles.clone(),
-                year: details.media.year,
-            }
-        } else if request.absolute_numbering {
-            MediaTarget::Anime {
-                tmdb_id: request.tmdb_id,
-                titles: titles.clone(),
-                year: details.media.year,
-                absolute_episode: 0,
-                season_episode: request
-                    .season
-                    .map(|season| SeasonEpisode { season, episode: 0 }),
-            }
-        } else {
-            MediaTarget::Episode {
-                tmdb_id: request.tmdb_id,
-                titles: titles.clone(),
-                year: details.media.year,
-                season: request.season.unwrap_or(1),
-                episode: 0,
-                allow_season_pack: true,
-            }
-        };
         let settings = self.db.get_media_settings().await?;
         let mut queries: Vec<String> = Vec::new();
         for title in titles.iter().take(3) {
@@ -3062,20 +3182,115 @@ impl MediaService {
         errors.extend(aggregate.errors.clone());
 
         let mut seen = HashSet::new();
-        let mut buckets: Vec<ReleaseGroupBucket> = Vec::new();
-        let mut matched = 0usize;
-        for result in aggregate.results {
-            if !seen.insert((result.site_id, result.torrent_id.clone())) {
-                continue;
+        let results: Vec<SearchResult> = aggregate
+            .results
+            .into_iter()
+            .filter(|result| seen.insert((result.site_id, result.torrent_id.clone())))
+            .collect();
+        let snapshot = ProbeSnapshot {
+            media_type,
+            tmdb_id: request.tmdb_id,
+            titles,
+            year: details.media.year,
+            season: request.season,
+            absolute_numbering: request.absolute_numbering,
+            queries,
+            results,
+            errors,
+            total_sites: aggregate.total_sites,
+            successful_sites: aggregate.successful_sites,
+            probed_at: Utc::now().to_rfc3339(),
+        };
+        let response = self.classify_probe(&snapshot, &request.numbering);
+        let probe_id = new_candidate_id()?.replacen("cand_", "probe_", 1);
+        self.probe_cache
+            .lock()
+            .await
+            .insert(probe_id.clone(), snapshot);
+        Ok(ReleaseGroupProbeResponse {
+            probe_id: Some(probe_id),
+            ..response
+        })
+    }
+
+    /// 用缓存的探测结果按新的编号映射重新归类；缓存过期时返回 `NotFound`。
+    pub async fn regroup_release_probe(
+        &self,
+        request: &ReleaseGroupRegroupRequest,
+    ) -> Result<ReleaseGroupProbeResponse, MediaServiceError> {
+        let snapshot = self
+            .probe_cache
+            .lock()
+            .await
+            .get(&request.probe_id)
+            .ok_or_else(|| MediaServiceError::NotFound("probe result has expired".to_string()))?;
+        let response = self.classify_probe(&snapshot, &request.numbering);
+        Ok(ReleaseGroupProbeResponse {
+            probe_id: Some(request.probe_id.clone()),
+            ..response
+        })
+    }
+
+    fn classify_probe(
+        &self,
+        snapshot: &ProbeSnapshot,
+        numbering: &[NumberingRule],
+    ) -> ReleaseGroupProbeResponse {
+        let titles = snapshot.titles.clone();
+        let year = snapshot.year;
+        let target = if snapshot.media_type == TmdbMediaType::Movie {
+            MediaTarget::Movie {
+                tmdb_id: snapshot.tmdb_id,
+                titles,
+                year,
             }
-            let Ok(release) = self.parse_result(&result)
-            else {
+        } else if snapshot.absolute_numbering {
+            MediaTarget::Anime {
+                tmdb_id: snapshot.tmdb_id,
+                titles,
+                year,
+                absolute_episode: 0,
+                season_episode: snapshot
+                    .season
+                    .map(|season| SeasonEpisode { season, episode: 0 }),
+                numbering: numbering.to_vec(),
+            }
+        } else {
+            MediaTarget::Episode {
+                tmdb_id: snapshot.tmdb_id,
+                titles,
+                year,
+                season: snapshot.season.unwrap_or(1),
+                episode: 0,
+                allow_season_pack: true,
+                numbering: numbering.to_vec(),
+            }
+        };
+
+        let mut buckets: Vec<ReleaseGroupBucket> = Vec::new();
+        let mut mismatches: Vec<(u32, Vec<(SearchResult, ReleaseInfo)>)> = Vec::new();
+        let mut matched = 0usize;
+        let mut mapped = 0usize;
+        for result in &snapshot.results {
+            let Ok(release) = self.parse_result(result, target.numbering()) else {
                 continue;
             };
             if !IdentityGate::matches_series(&target, &release) {
+                // 只差季号的资源单独列出：多半是站点自行编了季号，可以配置编号映射。
+                if let Some(season) = release.season
+                    && IdentityGate::differs_only_by_season(&target, &release)
+                {
+                    match mismatches.iter_mut().find(|(key, _)| *key == season) {
+                        Some((_, items)) => items.push((result.clone(), release)),
+                        None => mismatches.push((season, vec![(result.clone(), release)])),
+                    }
+                }
                 continue;
             }
             matched += 1;
+            if release.numbering_note.is_some() {
+                mapped += 1;
+            }
             let key = release
                 .release_group
                 .as_deref()
@@ -3092,7 +3307,7 @@ impl MediaService {
                     buckets.last_mut().expect("bucket was just pushed")
                 }
             };
-            bucket.items.push((result, release));
+            bucket.items.push((result.clone(), release));
         }
         let mut groups: Vec<ReleaseGroupSummary> = buckets
             .into_iter()
@@ -3106,15 +3321,28 @@ impl MediaService {
                 .then_with(|| right.latest_publish.cmp(&left.latest_publish))
                 .then_with(|| right.count.cmp(&left.count))
         });
-        Ok(ReleaseGroupProbeResponse {
-            queries,
+        let mut season_mismatches: Vec<SeasonMismatchSummary> = mismatches
+            .into_iter()
+            .map(|(season, items)| SeasonMismatchSummary::of(season, &items))
+            .collect();
+        season_mismatches.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.season.cmp(&right.season))
+        });
+        ReleaseGroupProbeResponse {
+            probe_id: None,
+            queries: snapshot.queries.clone(),
             matched,
+            mapped,
             groups,
-            errors,
-            total_sites: aggregate.total_sites,
-            successful_sites: aggregate.successful_sites,
-            probed_at: Utc::now().to_rfc3339(),
-        })
+            season_mismatches,
+            errors: snapshot.errors.clone(),
+            total_sites: snapshot.total_sites,
+            successful_sites: snapshot.successful_sites,
+            probed_at: snapshot.probed_at.clone(),
+        }
     }
 
     pub async fn list_group_upgrades(
@@ -3665,6 +3893,36 @@ fn failed_run_snapshot(
     }
 }
 
+/// 按编号映射反推出站点上的季/集，生成如「Title S03E02」的搜索词。
+fn site_numbering_queries(target: &MediaTarget) -> Vec<String> {
+    let (season, episode) = match target {
+        MediaTarget::Episode {
+            season, episode, ..
+        } => (*season, *episode),
+        MediaTarget::Anime {
+            season_episode: Some(mapping),
+            ..
+        } => (mapping.season, mapping.episode),
+        _ => return Vec::new(),
+    };
+    let mut queries = Vec::new();
+    for rule in target.numbering() {
+        let Some((site_season, site_episode)) = rule.site_numbering(season, episode) else {
+            continue;
+        };
+        for title in target.titles().iter().take(2) {
+            let title = title.trim();
+            if !title.is_empty() {
+                push_case_insensitive(
+                    &mut queries,
+                    &format!("{title} S{site_season:02}E{site_episode:02}"),
+                );
+            }
+        }
+    }
+    queries
+}
+
 fn subscription_target(
     subscription: &SubscriptionRecord,
 ) -> Result<MediaTarget, MediaServiceError> {
@@ -3692,6 +3950,7 @@ fn subscription_target(
                 .season
                 .zip(subscription.next_episode)
                 .map(|(season, episode)| SeasonEpisode { season, episode }),
+            numbering: subscription.numbering.clone(),
         });
     }
     Ok(MediaTarget::Episode {
@@ -3705,6 +3964,7 @@ fn subscription_target(
             MediaServiceError::Invalid("TV subscription has no next episode".to_string())
         })?,
         allow_season_pack: false,
+        numbering: subscription.numbering.clone(),
     })
 }
 
@@ -4591,6 +4851,7 @@ mod tests {
             query: query.map(str::to_string),
             site_ids,
             target: Some(MediaTarget::Episode {
+                numbering: Vec::new(),
                 tmdb_id: 42,
                 titles: titles.into_iter().map(str::to_string).collect(),
                 year: None,
@@ -4691,6 +4952,7 @@ mod tests {
         let subscription = db
             .create_subscription_with_targets(
                 &NewSubscription {
+                    numbering: Vec::new(),
                     group_policy: Default::default(),
                     tmdb_id,
                     media_type: "tv".to_string(),
@@ -5440,6 +5702,7 @@ mod tests {
             .parse("Crowned in a Hundred Days 2026 S01E06 1080p WEB-DL H.264 AAC-UBWEB")
             .unwrap();
         let original_target = MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 326844,
             titles: vec!["百日成王".to_string(), "Bai Ri Cheng Wang".to_string()],
             year: Some(2026),
@@ -5453,6 +5716,7 @@ mod tests {
         assert_eq!(original_decision.rejections[0].code, RejectCode::WrongTitle);
 
         let translated_target = MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 326844,
             titles: vec![
                 "百日成王".to_string(),
@@ -5496,6 +5760,7 @@ mod tests {
     #[test]
     fn subscription_target_uses_absolute_episode_when_configured() {
         let mut subscription = SubscriptionRecord {
+            numbering: Vec::new(),
             group_policy: Default::default(),
             id: 1,
             tmdb_id: 2,
@@ -5585,6 +5850,7 @@ mod tests {
         let (_dir, service, db, site_id, _other_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                numbering: Vec::new(),
                 group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "tv".to_string(),
@@ -5672,6 +5938,7 @@ mod tests {
         let (_dir, service, db, site_id, other_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                numbering: Vec::new(),
                 group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "tv".to_string(),
@@ -5694,6 +5961,7 @@ mod tests {
             .await
             .unwrap();
         let other_target = MediaTarget::Episode {
+            numbering: Vec::new(),
             tmdb_id: 42,
             titles: vec!["Example Show".to_string()],
             year: Some(2026),
@@ -5910,6 +6178,7 @@ mod tests {
         let subscription = db
             .create_subscription_with_targets(
                 &NewSubscription {
+                    numbering: Vec::new(),
                     group_policy: Default::default(),
                     tmdb_id: 42,
                     media_type: "tv".to_string(),
@@ -6008,6 +6277,7 @@ mod tests {
         let target_key = crate::media::models::target_key("tv", 42, Some(1), Some(3), None);
         db.create_subscription_with_targets(
             &NewSubscription {
+                numbering: Vec::new(),
                 group_policy: policy,
                 tmdb_id: 42,
                 media_type: "tv".to_string(),
@@ -6422,6 +6692,7 @@ mod tests {
         let (_dir, service, db, first_site, _second_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                numbering: Vec::new(),
                 group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "movie".to_string(),
@@ -6489,6 +6760,7 @@ mod tests {
         let (_dir, service, db, first_site, _second_site, downloader_id) = test_service().await;
         let subscription = db
             .create_subscription(&NewSubscription {
+                numbering: Vec::new(),
                 group_policy: Default::default(),
                 tmdb_id: 42,
                 media_type: "movie".to_string(),
@@ -6544,5 +6816,32 @@ mod tests {
             Err(error) => error,
         };
         assert!(matches!(duplicate, MediaServiceError::Invalid(_)));
+    }
+
+    #[test]
+    fn numbering_rules_add_site_numbered_queries_first() {
+        use crate::media::domain::numbering::NumberingRule;
+
+        let target = MediaTarget::Episode {
+            tmdb_id: 88319,
+            titles: vec!["罗小黑战记".into(), "The Legend of LUOXIAOHEI".into()],
+            year: Some(2011),
+            season: 1,
+            episode: 42,
+            allow_season_pack: false,
+            numbering: vec![NumberingRule {
+                keyword: None,
+                source_season: 3,
+                target_season: 1,
+                episode_offset: 40,
+            }],
+        };
+        assert_eq!(
+            site_numbering_queries(&target),
+            vec![
+                "罗小黑战记 S03E02".to_string(),
+                "The Legend of LUOXIAOHEI S03E02".to_string(),
+            ]
+        );
     }
 }

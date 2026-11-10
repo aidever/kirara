@@ -67,6 +67,11 @@ import {
   type GroupUpgradeRecord,
 } from "@/components/media/release-group-picker";
 import {
+  cleanNumbering,
+  normalizeNumbering,
+  type NumberingRule,
+} from "@/components/media/numbering-rules";
+import {
   matchesLocalResourceQuery,
   parseLocalReleaseScope,
   type LocalReleaseScope,
@@ -127,6 +132,7 @@ type Subscription = {
   absolute_episode: number | null;
   quality_profile_id: number;
   group_policy?: GroupPolicy;
+  numbering?: NumberingRule[];
   downloader_id: number;
   site_ids: number[];
   save_path: string | null;
@@ -355,6 +361,7 @@ type MediaTarget =
       season: number;
       episode: number;
       allow_season_pack: boolean;
+      numbering?: NumberingRule[];
     }
   | {
       target_type: "anime";
@@ -363,6 +370,7 @@ type MediaTarget =
       year: number | null;
       absolute_episode: number;
       season_episode: { season: number; episode: number } | null;
+      numbering?: NumberingRule[];
     };
 
 type SubscriptionForm = {
@@ -375,6 +383,7 @@ type SubscriptionForm = {
   siteIds: number[];
   savePath: string;
   groupPolicy: GroupPolicy;
+  numbering: NumberingRule[];
 };
 
 type ResourceForm = {
@@ -437,6 +446,7 @@ const EMPTY_SUBSCRIPTION_FORM: SubscriptionForm = {
   siteIds: [],
   savePath: "",
   groupPolicy: DEFAULT_GROUP_POLICY,
+  numbering: [],
 };
 
 const EMPTY_SEASON_METADATA: SeasonMetadataState = {
@@ -918,6 +928,7 @@ function targetForSubscription(subscription: Subscription): MediaTarget {
         subscription.season != null && subscription.next_episode != null
           ? { season: subscription.season, episode: subscription.next_episode }
           : null,
+      numbering: normalizeNumbering(subscription.numbering),
     };
   }
   return {
@@ -928,6 +939,7 @@ function targetForSubscription(subscription: Subscription): MediaTarget {
     season: subscription.season ?? 1,
     episode: subscription.next_episode ?? subscription.start_episode ?? 1,
     allow_season_pack: false,
+    numbering: normalizeNumbering(subscription.numbering),
   };
 }
 
@@ -1543,6 +1555,7 @@ export function MediaPage() {
       siteIds: subscription.site_ids,
       savePath: subscription.save_path ?? "",
       groupPolicy: normalizeGroupPolicy(subscription.group_policy),
+      numbering: normalizeNumbering(subscription.numbering),
     });
     if (subscription.media_type === "tv") {
       void loadEditDetails(subscription);
@@ -1588,6 +1601,7 @@ export function MediaPage() {
           site_ids: editSubscriptionForm.siteIds,
           save_path: editSubscriptionForm.savePath.trim() || null,
           group_policy: cleanGroupPolicy(editSubscriptionForm.groupPolicy),
+          numbering: editingSubscription.media_type === "tv" ? cleanNumbering(editSubscriptionForm.numbering) : [],
           enabled: editingSubscription.enabled,
           reset_download_history: clearingHistory,
         }),
@@ -1853,6 +1867,7 @@ export function MediaPage() {
       siteIds: sites.map((site) => site.id),
       savePath: "",
       groupPolicy: { ...DEFAULT_GROUP_POLICY },
+      numbering: [],
     });
     void loadCreateDetails(media);
     if (media.media_type === "tv") {
@@ -1909,6 +1924,7 @@ export function MediaPage() {
           site_ids: subscriptionForm.siteIds,
           save_path: subscriptionForm.savePath.trim() || null,
           group_policy: cleanGroupPolicy(subscriptionForm.groupPolicy),
+          numbering: selectedMedia.media_type === "tv" ? cleanNumbering(subscriptionForm.numbering) : [],
           enabled: true,
         }),
       });
@@ -2445,6 +2461,8 @@ export function MediaPage() {
               siteIds={subscriptionForm.siteIds}
               policy={subscriptionForm.groupPolicy}
               onChange={(groupPolicy) => setSubscriptionForm((current) => ({ ...current, groupPolicy }))}
+              numbering={subscriptionForm.numbering}
+              onNumberingChange={(numbering) => setSubscriptionForm((current) => ({ ...current, numbering }))}
               qualityProfileName={profiles.find((profile) => String(profile.id) === subscriptionForm.qualityProfileId)?.name}
             />
 
@@ -2557,6 +2575,8 @@ export function MediaPage() {
               siteIds={editSubscriptionForm.siteIds}
               policy={editSubscriptionForm.groupPolicy}
               onChange={(groupPolicy) => setEditSubscriptionForm((current) => ({ ...current, groupPolicy }))}
+              numbering={editSubscriptionForm.numbering}
+              onNumberingChange={(numbering) => setEditSubscriptionForm((current) => ({ ...current, numbering }))}
               qualityProfileName={profiles.find((profile) => String(profile.id) === editSubscriptionForm.qualityProfileId)?.name}
             />
 
