@@ -16,6 +16,7 @@ use crate::net::client_factory;
 
 use super::domain::group::{
     self as group_policy, CandidateGroupInfo, GroupCandidate, GroupPolicy, GroupSelection,
+    ReleaseTraits,
 };
 use super::domain::{
     DecisionEngine, IdentityGate, MatchDecision, MediaTarget, QualityProfile, QueryGenerator,
@@ -200,12 +201,54 @@ pub struct ReleaseGroupSummary {
     pub max_seeders: u32,
     pub median_seeders: u32,
     pub sample_title: String,
+    /// 按分辨率、编码、动态范围细分的版本，画质从高到低。
+    #[serde(default)]
+    pub variants: Vec<ReleaseVariantSummary>,
 }
 
 impl ReleaseGroupSummary {
     fn episode_count(&self) -> usize {
         self.episodes.len().max(self.absolute_episodes.len())
     }
+}
+
+/// 同一制作组内分辨率、编码、动态范围都相同的一批资源。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseVariantSummary {
+    pub resolution: Option<String>,
+    pub codec: Option<String>,
+    /// 动态范围标签：`Dolby Vision`、`HDR10`、`SDR` 等。
+    pub hdr: String,
+    /// 帧率标签：`60fps`、`HFR`、`常规帧率`。
+    pub frame_rate: String,
+    /// 画质档标签：`HQ`、`EDR`、`MAXPLUS`、`普通档`。
+    pub tier: String,
+    /// 片源平台标签：`Netflix`、`Baha`、`未标平台` 等。
+    pub platform: String,
+    pub sources: Vec<String>,
+    pub count: usize,
+    pub sites: Vec<String>,
+    pub episodes: Vec<u32>,
+    pub absolute_episodes: Vec<u32>,
+    pub has_pack: bool,
+    pub latest_publish: Option<chrono::DateTime<Utc>>,
+    pub size_per_episode: Option<u64>,
+    /// 单集体积的最小值和最大值；相差很大时可能混有标题没写出来的不同规格。
+    pub min_size_per_episode: Option<u64>,
+    pub max_size_per_episode: Option<u64>,
+    pub max_seeders: u32,
+    /// 该版本的全部种子，最新发布的在前。
+    pub torrents: Vec<ProbeTorrent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeTorrent {
+    pub result: SearchResult,
+    pub episodes: Vec<u32>,
+    pub absolute_episodes: Vec<u32>,
+    pub full_season: bool,
+    pub total_episodes: Option<u32>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,41 +268,45 @@ struct ReleaseGroupBucket {
     items: Vec<(SearchResult, ReleaseInfo)>,
 }
 
-impl ReleaseGroupBucket {
-    fn summarize(self) -> ReleaseGroupSummary {
-        fn push_unique(values: &mut Vec<String>, value: Option<&str>) {
-            if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty())
-                && !values
-                    .iter()
-                    .any(|existing| existing.eq_ignore_ascii_case(value))
-            {
-                values.push(value.to_string());
-            }
-        }
+fn push_unique(values: &mut Vec<String>, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty())
+        && !values
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(value))
+    {
+        values.push(value.to_string());
+    }
+}
+
+/// 一批资源的共同统计：站点、集数、体积、做种、最近发布。
+struct ProbeStats {
+    sites: Vec<String>,
+    sources: Vec<String>,
+    episodes: Vec<u32>,
+    absolute_episodes: Vec<u32>,
+    has_pack: bool,
+    latest: Option<(chrono::DateTime<Utc>, String)>,
+    size_per_episode: Option<u64>,
+    min_size_per_episode: Option<u64>,
+    max_size_per_episode: Option<u64>,
+    max_seeders: u32,
+    median_seeders: u32,
+}
+
+impl ProbeStats {
+    fn of<'a>(items: impl IntoIterator<Item = &'a (SearchResult, ReleaseInfo)>) -> Self {
         let mut sites = Vec::new();
+        let mut sources = Vec::new();
         let mut episodes = Vec::new();
         let mut absolute_episodes = Vec::new();
-        let (mut resolutions, mut sources, mut codecs, mut hdr_formats) =
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut has_pack = false;
         let mut sizes = Vec::new();
         let mut seeders = Vec::new();
         let mut latest: Option<(chrono::DateTime<Utc>, String)> = None;
-        for (result, release) in &self.items {
+        for (result, release) in items {
             push_unique(&mut sites, Some(&result.source_site));
-            push_unique(&mut resolutions, release.resolution.as_deref());
             push_unique(&mut sources, release.source.as_deref());
-            push_unique(&mut codecs, release.codec.as_deref());
-            for hdr in &release.hdr_formats {
-                push_unique(&mut hdr_formats, Some(hdr));
-            }
-            episodes.extend(release.episodes.iter().copied());
-            if release.episodes.is_empty()
-                && let Some(total) = release.total_episodes.filter(|total| *total <= 1000)
-            {
-                // 「全30集」整季包：已包含第 1 到 30 集。
-                episodes.extend(1..=total);
-            }
+            episodes.extend(release_episodes(release));
             absolute_episodes.extend(release.absolute_episodes.iter().copied());
             let units = release.episodes.len().max(release.absolute_episodes.len());
             if release.full_season || units > 1 {
@@ -281,27 +328,174 @@ impl ReleaseGroupBucket {
         absolute_episodes.dedup();
         sizes.sort_unstable();
         seeders.sort_unstable();
-        let sample_title = latest
+        Self {
+            sites,
+            sources,
+            episodes,
+            absolute_episodes,
+            has_pack,
+            latest,
+            size_per_episode: sizes.get(sizes.len() / 2).copied(),
+            min_size_per_episode: sizes.first().copied(),
+            max_size_per_episode: sizes.last().copied(),
+            max_seeders: seeders.last().copied().unwrap_or(0),
+            median_seeders: seeders.get(seeders.len() / 2).copied().unwrap_or(0),
+        }
+    }
+}
+
+/// 资源包含的集数；「全30集」这类整季包视为包含第 1 到 30 集。
+fn release_episodes(release: &ReleaseInfo) -> Vec<u32> {
+    if release.episodes.is_empty()
+        && let Some(total) = release.total_episodes.filter(|total| *total <= 1000)
+    {
+        return (1..=total).collect();
+    }
+    release.episodes.clone()
+}
+
+fn resolution_height(value: Option<&str>) -> u32 {
+    value
+        .and_then(|value| value.trim_end_matches(['p', 'P', 'i']).parse().ok())
+        .unwrap_or(0)
+}
+
+/// 动态范围排序：杜比视界在前，其次 HDR10+、HDR10、其他 HDR，SDR 最后。
+fn hdr_order(label: &str) -> u8 {
+    if label.contains("Dolby Vision") {
+        0
+    } else if label.contains("HDR10+") {
+        1
+    } else if label.contains("HDR10") {
+        2
+    } else if label == group_policy::SDR_LABEL {
+        4
+    } else {
+        3
+    }
+}
+
+impl ReleaseGroupBucket {
+    fn summarize(self) -> ReleaseGroupSummary {
+        let (mut resolutions, mut codecs, mut hdr_formats) = (Vec::new(), Vec::new(), Vec::new());
+        for (_, release) in &self.items {
+            push_unique(&mut resolutions, release.resolution.as_deref());
+            push_unique(&mut codecs, release.codec.as_deref());
+            for hdr in &release.hdr_formats {
+                push_unique(&mut hdr_formats, Some(hdr));
+            }
+        }
+        let stats = ProbeStats::of(&self.items);
+        let sample_title = stats
+            .latest
             .as_ref()
             .map(|(_, title)| title.clone())
             .or_else(|| self.items.first().map(|(result, _)| result.title.clone()))
             .unwrap_or_default();
+
+        type VariantKey = (Option<String>, Option<String>, String, String, String, String);
+        let mut variant_items: Vec<(VariantKey, Vec<&(SearchResult, ReleaseInfo)>)> = Vec::new();
+        for item in &self.items {
+            let release = &item.1;
+            let key = (
+                release.resolution.clone(),
+                release.codec.clone(),
+                group_policy::hdr_label(&release.hdr_formats),
+                group_policy::frame_rate_label(release.frame_rate.as_deref()).to_string(),
+                group_policy::tier_label(release.quality_tier.as_deref()).to_string(),
+                group_policy::platform_label(release.platform.as_deref()).to_string(),
+            );
+            match variant_items
+                .iter_mut()
+                .find(|(existing, _)| *existing == key)
+            {
+                Some((_, items)) => items.push(item),
+                None => variant_items.push((key, vec![item])),
+            }
+        }
+        let mut variants: Vec<ReleaseVariantSummary> = variant_items
+            .into_iter()
+            .map(|((resolution, codec, hdr, frame_rate, tier, platform), items)| {
+                let stats = ProbeStats::of(items.iter().copied());
+                let mut torrents: Vec<ProbeTorrent> = items
+                    .iter()
+                    .map(|(result, release)| ProbeTorrent {
+                        result: result.clone(),
+                        episodes: release.episodes.clone(),
+                        absolute_episodes: release.absolute_episodes.clone(),
+                        full_season: release.full_season,
+                        total_episodes: release.total_episodes,
+                        source: release.source.clone(),
+                    })
+                    .collect();
+                torrents.sort_by(|left, right| {
+                    right
+                        .result
+                        .publish_time
+                        .cmp(&left.result.publish_time)
+                        .then_with(|| right.result.seeders.cmp(&left.result.seeders))
+                });
+                ReleaseVariantSummary {
+                    resolution,
+                    codec,
+                    hdr,
+                    frame_rate,
+                    tier,
+                    platform,
+                    sources: stats.sources,
+                    count: items.len(),
+                    sites: stats.sites,
+                    episodes: stats.episodes,
+                    absolute_episodes: stats.absolute_episodes,
+                    has_pack: stats.has_pack,
+                    latest_publish: stats.latest.map(|(time, _)| time),
+                    size_per_episode: stats.size_per_episode,
+                    min_size_per_episode: stats.min_size_per_episode,
+                    max_size_per_episode: stats.max_size_per_episode,
+                    max_seeders: stats.max_seeders,
+                    torrents,
+                }
+            })
+            .collect();
+        variants.sort_by(|left, right| {
+            resolution_height(right.resolution.as_deref())
+                .cmp(&resolution_height(left.resolution.as_deref()))
+                .then_with(|| hdr_order(&left.hdr).cmp(&hdr_order(&right.hdr)))
+                .then_with(|| {
+                    let plain = |variant: &ReleaseVariantSummary| {
+                        (
+                            variant.tier == group_policy::STANDARD_TIER,
+                            variant.frame_rate == group_policy::STANDARD_FRAME_RATE,
+                        )
+                    };
+                    plain(left).cmp(&plain(right))
+                })
+                .then_with(|| {
+                    let units = |variant: &ReleaseVariantSummary| {
+                        variant.episodes.len().max(variant.absolute_episodes.len())
+                    };
+                    units(right).cmp(&units(left))
+                })
+                .then_with(|| right.count.cmp(&left.count))
+        });
+
         ReleaseGroupSummary {
             name: self.name.filter(|_| !self.key.is_empty()),
             count: self.items.len(),
-            sites,
-            episodes,
-            absolute_episodes,
-            has_pack,
+            sites: stats.sites,
+            episodes: stats.episodes,
+            absolute_episodes: stats.absolute_episodes,
+            has_pack: stats.has_pack,
             resolutions,
-            sources,
+            sources: stats.sources,
             codecs,
             hdr_formats,
-            latest_publish: latest.map(|(time, _)| time),
-            size_per_episode: sizes.get(sizes.len() / 2).copied(),
-            max_seeders: seeders.last().copied().unwrap_or(0),
-            median_seeders: seeders.get(seeders.len() / 2).copied().unwrap_or(0),
+            latest_publish: stats.latest.map(|(time, _)| time),
+            size_per_episode: stats.size_per_episode,
+            max_seeders: stats.max_seeders,
+            median_seeders: stats.median_seeders,
             sample_title,
+            variants,
         }
     }
 }
@@ -2975,7 +3169,23 @@ impl MediaService {
             self.db.save_media_group_upgrade(&record).await?;
             return Ok(());
         }
-        let current_rank = policy.upgrade_rank(policy.rank_of(record.current_group.as_deref()));
+        // 条目可能限定分辨率/编码/动态范围，需要用当前版本的完整标题重新判定位置。
+        let current_release = match self.db.get_media_download(record.download_id).await? {
+            Some(download) => self.parser.parse(&download.title).ok(),
+            None => None,
+        };
+        let current_rank = match &current_release {
+            Some(release) => policy.upgrade_rank(
+                policy.rank_of(
+                    release
+                        .release_group
+                        .as_deref()
+                        .or(record.current_group.as_deref()),
+                    &ReleaseTraits::of(release),
+                ),
+            ),
+            None => record.current_rank,
+        };
         record.current_rank = current_rank;
         if current_rank == 0 {
             record.status = "done".to_string();
@@ -3510,6 +3720,11 @@ fn group_candidate(candidate: &ResourceCandidate) -> GroupCandidate<'_> {
             .and_then(|release| release.release_group.as_deref()),
         title: &candidate.result.title,
         publish_time: candidate.result.publish_time,
+        traits: candidate
+            .release
+            .as_ref()
+            .map(ReleaseTraits::of)
+            .unwrap_or_default(),
     }
 }
 
@@ -3544,7 +3759,7 @@ fn group_selection_note(
         return (picked.is_none() && filtered > 0)
             .then(|| format!("{filtered} 个可用资源被包含/排除规则过滤"));
     }
-    let primary = &policy.groups[0];
+    let primary = policy.groups[0].label();
     if let Some(index) = waiting {
         return Some(format!(
             "首选组 {primary} 尚未发布，等待结束后使用 {}",
@@ -4306,6 +4521,65 @@ mod tests {
             leechers: 0,
             publish_time: None,
         }
+    }
+
+    #[test]
+    fn probe_summary_splits_a_group_into_quality_variants_with_torrents() {
+        let parser = ReleaseParser::default();
+        let titles = [
+            "Show.S01E01.2160p.WEB-DL.H265.DV.DDP5.1-CHDWEB",
+            "Show.S01E02.2160p.WEB-DL.H265.DV.DDP5.1-CHDWEB",
+            "Show.S01E01.2160p.WEB-DL.H265.HDR10-CHDWEB",
+            "Show.S01E01.1080p.WEB-DL.H264-CHDWEB",
+            "Show 2026 S01 E05-07 2160p Youku WEB-DL HQ HFR H265 AAC-CHDWEB",
+            "Show 2026 S01 E09-10 2160p Youku WEB-DL HFR H265 AAC-CHDWEB",
+        ];
+        let items = titles
+            .iter()
+            .enumerate()
+            .map(|(index, title)| {
+                (
+                    episode_search_result(1, &index.to_string(), title),
+                    parser.parse(title).unwrap(),
+                )
+            })
+            .collect();
+        let summary = ReleaseGroupBucket {
+            key: "chdweb".to_string(),
+            name: Some("CHDWEB".to_string()),
+            items,
+        }
+        .summarize();
+        let variants: Vec<_> = summary
+            .variants
+            .iter()
+            .map(|variant| {
+                (
+                    variant.resolution.as_deref(),
+                    variant.codec.as_deref(),
+                    variant.hdr.as_str(),
+                    variant.frame_rate.as_str(),
+                    variant.tier.as_str(),
+                    variant.torrents.len(),
+                )
+            })
+            .collect();
+        let (normal, standard) = (
+            group_policy::STANDARD_FRAME_RATE,
+            group_policy::STANDARD_TIER,
+        );
+        assert_eq!(
+            variants,
+            vec![
+                (Some("2160p"), Some("H265"), "Dolby Vision", normal, standard, 2),
+                (Some("2160p"), Some("H265"), "HDR10", normal, standard, 1),
+                (Some("2160p"), Some("H265"), "SDR", "HFR", "HQ", 1),
+                (Some("2160p"), Some("H265"), "SDR", "HFR", standard, 1),
+                (Some("1080p"), Some("H264"), "SDR", normal, standard, 1),
+            ]
+        );
+        assert_eq!(summary.variants[0].episodes, vec![1, 2]);
+        assert_eq!(summary.count, 6);
     }
 
     fn episode_search_request(

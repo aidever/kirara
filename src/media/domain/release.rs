@@ -22,6 +22,15 @@ pub struct ReleaseInfo {
     pub hdr_formats: Vec<String>,
     #[serde(default)]
     pub bit_depth: Option<u8>,
+    /// 高帧率标记：`60fps`、`50fps`、`120fps`，只写 `HFR` 时为 `HFR`；常规帧率为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<String>,
+    /// 平台的增强画质档：`HQ`（高码率）、`EDR`、`MAXPLUS`；普通版本为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_tier: Option<String>,
+    /// 流媒体片源平台，如 `Netflix`、`Baha`、`friDay`；同一集在不同平台的码率差别很大。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
     pub revision: Option<String>,
     pub release_group: Option<String>,
     pub matched_rule: String,
@@ -90,6 +99,9 @@ impl ReleaseParser {
         let source = parse_source(raw_title);
         let hdr_formats = parse_hdr_formats(raw_title);
         let bit_depth = parse_bit_depth(raw_title);
+        let frame_rate = parse_frame_rate(raw_title);
+        let quality_tier = parse_quality_tier(raw_title);
+        let platform = parse_platform(raw_title);
         let mut revision = parse_revision(raw_title);
         let mut release_group = parse_release_group(raw_title);
         let parsed_year = self.parse_movie_year(raw_title);
@@ -196,6 +208,9 @@ impl ReleaseParser {
             source,
             hdr_formats,
             bit_depth,
+            frame_rate,
+            quality_tier,
+            platform,
             revision,
             release_group,
             matched_rule: matched_rule.to_owned(),
@@ -794,10 +809,77 @@ fn parse_hdr_formats(title: &str) -> Vec<String> {
     if hlg_regex().is_match(title) {
         formats.push("HLG".to_owned());
     }
-    if hdr_regex().is_match(title) {
+    if hdr_vivid_regex().is_match(title) {
+        formats.push("HDR Vivid".to_owned());
+    } else if hdr_regex().is_match(title) {
         formats.push("HDR".to_owned());
     }
     formats
+}
+
+/// 高帧率：明确写出 48 帧及以上时用数字，只写 HFR 时记为 `HFR`。
+fn parse_frame_rate(title: &str) -> Option<String> {
+    let explicit = fps_regex()
+        .captures_iter(title)
+        .filter_map(|captures| captures["value"].parse::<u32>().ok())
+        .find(|value| (48..=240).contains(value));
+    match explicit {
+        Some(value) => Some(format!("{value}fps")),
+        None => hfr_regex().is_match(title).then(|| "HFR".to_owned()),
+    }
+}
+
+/// 片源平台。只在第一个画质标记（分辨率、编码等）之后查找，避免把剧名里的
+/// 「Max」「Hulu」之类当成平台；简写（NF、TX、IQ、CR、iT）同样只在这一段里认。
+fn parse_platform(title: &str) -> Option<String> {
+    let start = first_quality_marker(title)?;
+    let tail = &title[start..];
+    platform_regex().captures(tail).map(|captures| {
+        let token = captures["value"].to_ascii_lowercase();
+        let compact: String = token.chars().filter(char::is_ascii_alphanumeric).collect();
+        match compact.as_str() {
+            "nf" | "netflix" => "Netflix",
+            "amzn" | "amazon" => "Amazon",
+            "dsnp" | "disney" => "Disney+",
+            "atvp" => "Apple TV+",
+            "hmax" | "max" => "Max",
+            "it" | "itunes" => "iTunes",
+            "hulu" => "Hulu",
+            "pcok" | "peacock" => "Peacock",
+            "pmtp" => "Paramount+",
+            "cr" | "crunchyroll" => "Crunchyroll",
+            "baha" => "Baha",
+            "friday" => "friDay",
+            "linetv" => "LINE TV",
+            "hamivideo" => "Hami Video",
+            "myvideo" => "myVideo",
+            "nowplayer" => "Now",
+            "mytvsuper" => "myTV SUPER",
+            "kktv" => "KKTV",
+            "viu" => "Viu",
+            "catchplay" => "CATCHPLAY",
+            "youku" => "Youku",
+            "iq" | "iqiyi" => "iQIYI",
+            "tx" | "tencent" | "wetv" => "Tencent",
+            "mgtv" => "MGTV",
+            "bilibili" | "bglobal" => "Bilibili",
+            _ => unreachable!("platform regex and mapping must stay aligned"),
+        }
+        .to_owned()
+    })
+}
+
+/// 平台增强画质档：爱奇艺/优酷的 HQ（高码率）、优酷 EDR、腾讯 MAXPLUS。
+fn parse_quality_tier(title: &str) -> Option<String> {
+    if max_plus_regex().is_match(title) {
+        Some("MAXPLUS".to_owned())
+    } else if hq_regex().is_match(title) {
+        Some("HQ".to_owned())
+    } else if edr_regex().is_match(title) {
+        Some("EDR".to_owned())
+    } else {
+        None
+    }
 }
 
 fn parse_bit_depth(title: &str) -> Option<u8> {
@@ -1046,6 +1128,26 @@ regex_fn!(
 regex_fn!(hlg_regex, r"(?i)(?:^|[^a-z0-9])hlg(?:[^a-z0-9]|$)");
 regex_fn!(hdr_regex, r"(?i)(?:^|[^a-z0-9])hdr(?:[^a-z0-9]|$)");
 regex_fn!(
+    hdr_vivid_regex,
+    r"(?i)(?:^|[^a-z0-9])hdr[ ._-]*vivid(?:[^a-z0-9]|$)"
+);
+regex_fn!(
+    fps_regex,
+    // 数字前只要求不是数字，以兼容「1080p60fps」这类连写。
+    r"(?i)(?:^|[^0-9])(?P<value>\d{2,3})[ ._-]*(?:fps|帧率?)(?:[^a-z0-9]|$)"
+);
+regex_fn!(hfr_regex, r"(?i)(?:^|[^a-z0-9])hfr(?:[^a-z0-9]|$)");
+regex_fn!(
+    platform_regex,
+    r"(?i)(?:^|[^a-z0-9+])(?P<value>nf|netflix|amzn|amazon|dsnp|disney\+?|atvp|hmax|max|it|itunes|hulu|pcok|peacock|pmtp|cr|crunchyroll|baha|friday|line[ ._-]?tv|hami[ ._-]?video|myvideo|nowplayer|mytvsuper|kktv|viu|catchplay|youku|iq|iqiyi|tx|tencent|wetv|mgtv|bilibili|b[ ._-]?global)(?:[^a-z0-9+]|$)"
+);
+regex_fn!(hq_regex, r"(?i)(?:^|[^a-z0-9])hq(?:[^a-z0-9]|$)");
+regex_fn!(edr_regex, r"(?i)(?:^|[^a-z0-9])edr(?:[^a-z0-9]|$)");
+regex_fn!(
+    max_plus_regex,
+    r"(?i)(?:^|[^a-z0-9])max[ ._-]*plus(?:[^a-z0-9]|$)"
+);
+regex_fn!(
     bit_depth_regex,
     r"(?i)(?:^|[^a-z0-9])(?P<value>8|10|12)[ ._-]*bit(?:[^a-z0-9]|$)"
 );
@@ -1169,6 +1271,98 @@ mod tests {
         assert_eq!(release.hdr_formats, vec!["Dolby Vision", "HDR10+"]);
         assert_eq!(release.bit_depth, Some(10));
         assert_eq!(release.revision.as_deref(), Some("PROPER"));
+    }
+
+    #[test]
+    fn parses_frame_rate_quality_tier_and_hdr_vivid_from_web_titles() {
+        let cases: [(&str, Option<&str>, Option<&str>, &[&str]); 10] = [
+            (
+                "The Silent Storm 2026 S01 E05-07 2160p Youku WEB-DL HQ HFR H265 AAC-Momoda",
+                Some("HFR"),
+                Some("HQ"),
+                &[],
+            ),
+            (
+                "The Silent Storm 2026 S01 E09-10 2160p Youku WEB-DL HFR H265 AAC-Momoda",
+                Some("HFR"),
+                None,
+                &[],
+            ),
+            (
+                "The Silent Storm 2026 S01E4 2160p WEB-DL 60fps H265 HDR10 AAC-AilMWeb",
+                Some("60fps"),
+                None,
+                &["HDR10"],
+            ),
+            (
+                "The Silent Storm 2026 S01E5 2160p HQ WEB-DL H265 HDR10 AAC-AilMWeb",
+                None,
+                Some("HQ"),
+                &["HDR10"],
+            ),
+            (
+                "Lady Liberty 2026 S01E13-S01E14 2160p WEB-DL 60Fps MAXPLUS HDRVivid H265 10bit AAC-UBWEB",
+                Some("60fps"),
+                Some("MAXPLUS"),
+                &["HDR Vivid"],
+            ),
+            (
+                "The Epoch of Miyu 2026 S01E01-E04 2160p 60fps WEB-DL H.265 10bit HDR Vivid DDP5.1 4Audios-QHstudIo",
+                Some("60fps"),
+                None,
+                &["HDR Vivid"],
+            ),
+            (
+                "Chang An 2023 IMAX 2160p 60fps HQ WEB-DL H.265 10bit HDR10 DTS-X5.1.4 5Audios-QHstudIo",
+                Some("60fps"),
+                Some("HQ"),
+                &["HDR10"],
+            ),
+            (
+                "The Sword Immortal Is Here S02 2022 2160p WEB-DL H.265 EDR AAC 2.0-HHWEB",
+                None,
+                Some("EDR"),
+                &[],
+            ),
+            (
+                "FIFA World Cup 2026 Spain vs Saudi Arabia 20260622 1080p60fps ES Telemundo",
+                Some("60fps"),
+                None,
+                &[],
+            ),
+            (
+                "Show.S01E01.2160p.WEB-DL.DDP5.1.H265-GROUP",
+                None,
+                None,
+                &[],
+            ),
+        ];
+        for (title, frame_rate, tier, hdr) in cases {
+            let release = parser().parse(title).unwrap();
+            assert_eq!(release.frame_rate.as_deref(), frame_rate, "{title}");
+            assert_eq!(release.quality_tier.as_deref(), tier, "{title}");
+            assert_eq!(release.hdr_formats, hdr, "{title}");
+        }
+    }
+
+    #[test]
+    fn parses_streaming_platform_only_after_quality_markers() {
+        let cases = [
+            ("Bungo Stray Dogs Wan S02E02 1080p Baha WEB-DL AAC2.0 H.264-MWeb", Some("Baha")),
+            ("Hana-Kimi S02E03 1080p friDay WEB-DL AAC2.0 H.264-MWeb", Some("friDay")),
+            ("Hana-Kimi S02E03 1080p LINETV WEB-DL AAC2.0 H.264-MWeb", Some("LINE TV")),
+            ("Keep Running S10E13 2160p TX WEB-DL AAC2.0 HFR H.265-MWeb", Some("Tencent")),
+            ("Born with Luck 2026 S01E01-S01E05 2160p IQ WEB-DL H265 DDP5.1-UBWEB", Some("iQIYI")),
+            ("Pressure 2026 2160p iT WEB-DL DDP 5.1 Atmos HDR10 H.265-DepWeb", Some("iTunes")),
+            ("Show.S01E01.2160p.NF.WEB-DL.DDP5.1.H.265-GROUP", Some("Netflix")),
+            ("Filing for Love S01 1080p MAX WEB-DL H.265 DDP2.0-ADWeb", Some("Max")),
+            ("Mad Max Fury Road 2015 2160p UHD BluRay REMUX HEVC-GROUP", None),
+            ("Lady Liberty 2026 S01E13 2160p WEB-DL 60Fps MAXPLUS H265-UBWEB", None),
+        ];
+        for (title, platform) in cases {
+            let release = parser().parse(title).unwrap();
+            assert_eq!(release.platform.as_deref(), platform, "{title}");
+        }
     }
 
     #[test]
