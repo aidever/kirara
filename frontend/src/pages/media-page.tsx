@@ -19,6 +19,7 @@ import {
   CircleX,
   Download,
   Film,
+  Ellipsis,
   FileSearch2,
   Globe2,
   HardDriveDownload,
@@ -456,6 +457,7 @@ const EMPTY_RESOURCE_FORM: ResourceForm = {
 
 const RESOURCE_SITE_IDS_STORAGE_KEY = "kirara.media.resource-site-ids";
 const DOWNLOAD_PAGE_SIZE = 20;
+const CANDIDATE_PAGE_SIZE = 30;
 
 function storedResourceSiteIds(): number[] | null {
   if (typeof window === "undefined") return null;
@@ -2171,20 +2173,19 @@ export function MediaPage() {
   const missingPrerequisites = prerequisites.filter((item) => !item.ready);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-6">
       <header className="flex items-center justify-between gap-3">
-        <div>
-          <p className="mt-1 text-sm text-muted">
-            {initialLoading ? "正在读取订阅" : failedSections.includes("subscriptions") ? "订阅暂时无法读取" : `${subscriptions.length} 个订阅`}
-          </p>
-        </div>
-        <Button variant="outline" disabled={initialLoading || refreshing} onClick={() => void loadData()}>
+        <p className="text-sm text-muted">
+          {initialLoading ? "正在读取订阅" : failedSections.includes("subscriptions") ? "订阅暂时无法读取" : `${subscriptions.length} 个订阅`}
+        </p>
+        <Button variant="outline" className="h-9 px-3 sm:h-11 sm:px-5" disabled={initialLoading || refreshing} onClick={() => void loadData()}>
           <RefreshCw data-icon="inline-start" className={refreshing ? "motion-safe:animate-spin" : undefined} />
           刷新
         </Button>
       </header>
 
-      <div className="grid grid-cols-3 gap-1 rounded-xl border border-border bg-surface-container p-1 sm:grid-cols-5" role="tablist" aria-label="自动追剧模式">
+      {/* 手机上五个模式排成一行：图标在上、文字在下，避免折成两行且“质量与设置”断字。 */}
+      <div className="grid grid-cols-5 gap-1 rounded-xl border border-border bg-surface-container p-1" role="tablist" aria-label="自动追剧模式">
         {MODES.map((item) => {
           const Icon = item.icon;
           const active = mode === item.value;
@@ -2205,13 +2206,13 @@ export function MediaPage() {
                 document.getElementById(`media-tab-${MODES[next].value}`)?.focus();
               }}
               className={cn(
-                "flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:min-h-11 sm:flex-row sm:gap-2 sm:px-3 sm:text-sm",
                 active ? "bg-card text-primary shadow-sm" : "text-muted hover:bg-accent hover:text-foreground",
               )}
               onClick={() => setMode(item.value)}
             >
               <Icon className="size-4 shrink-0" aria-hidden="true" />
-              <span>{item.label}</span>
+              <span className="whitespace-nowrap">{item.label}</span>
             </button>
           );
         })}
@@ -2913,11 +2914,12 @@ function EmptyState({ icon: Icon, title, action }: { icon: typeof Film; title: s
   );
 }
 
-function StatusPill({ label, tone = "neutral" }: { label: string; tone?: "positive" | "negative" | "neutral" }) {
+function StatusPill({ label, tone = "neutral", size = "md" }: { label: string; tone?: "positive" | "negative" | "neutral"; size?: "md" | "sm" }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
+        "inline-flex items-center whitespace-nowrap rounded-full border font-semibold",
+        size === "sm" ? "px-2 py-0.5 text-[11px] leading-4" : "px-2.5 py-1 text-xs",
         tone === "positive"
           ? "border-primary/20 bg-primary/10 text-foreground"
           : tone === "negative"
@@ -3529,15 +3531,33 @@ function SubscriptionsPanel({
       || (downloadFilter === "pending" && !["submitted", "failed", "cancelled"].includes(item.status)))),
   [downloads, downloadQuery, downloadFilter]);
   const downloadFilterActive = Boolean(downloadQuery.trim()) || downloadFilter !== "all";
-  function actions(subscription: Subscription) {
+  /** compact：桌面表格里的图标按钮（36px，带提示文字）；否则是卡片里等分整行的 44px 文字按钮。 */
+  function actions(subscription: Subscription, compact = false) {
     const completed = subscriptionIsCompleted(subscription);
-    return <div className="flex flex-wrap items-start gap-2 lg:justify-end">
+    const running = busyKey === `run:${subscription.id}`;
+    if (compact) {
+      return <div className="flex items-start justify-end gap-1.5">
+        {subscription.last_run_at ? <Button variant="outline" className="size-9 p-0" title="运行详情" aria-label={`查看「${subscription.title}」运行详情`} onClick={() => onViewRun(subscription)}><FileSearch2 /></Button> : null}
+        {!completed ? <Button variant="outline" className="size-9 p-0" title="立即扫描" aria-label={`立即扫描「${subscription.title}」`} disabled={running} onClick={() => onAction(subscription, "run")}>
+          {running ? <LoaderCircle className="animate-spin" /> : <Play />}
+        </Button> : null}
+        <details className="rounded-lg border border-border">
+          <summary title="更多操作" className="flex size-9 cursor-pointer list-none items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"><Ellipsis className="size-4" aria-hidden="true" /><span className="sr-only">「{subscription.title}」更多操作</span></summary>
+          <div className="flex w-28 flex-col gap-1.5 border-t border-border p-1.5">
+            {!completed || subscription.media_type === "tv" ? <Button variant="outline" className="h-9 px-2" onClick={() => onEdit(subscription)}>编辑规则</Button> : null}
+            {!completed ? <Button variant="outline" className="h-9 px-2" disabled={busyKey === `${subscription.enabled ? "pause" : "resume"}:${subscription.id}`} onClick={() => onAction(subscription, subscription.enabled ? "pause" : "resume")}>{subscription.enabled ? "暂停" : "恢复"}</Button> : null}
+            <Button variant="outline" className="h-9 px-2 text-destructive" onClick={() => onDelete(subscription)}>删除订阅</Button>
+          </div>
+        </details>
+      </div>;
+    }
+    return <div className="flex flex-wrap items-start gap-2 [&>*]:flex-1">
       {subscription.last_run_at ? <Button variant="outline" className="h-11 px-3" onClick={() => onViewRun(subscription)}>详情</Button> : null}
-      {!completed ? <Button variant="outline" className="h-11 px-3" disabled={busyKey === `run:${subscription.id}`} onClick={() => onAction(subscription, "run")}>
-        {busyKey === `run:${subscription.id}` ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}扫描
+      {!completed ? <Button variant="outline" className="h-11 px-3" disabled={running} onClick={() => onAction(subscription, "run")}>
+        {running ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}扫描
       </Button> : null}
       <details className="max-w-full rounded-lg border border-border">
-        <summary className="flex min-h-11 cursor-pointer items-center gap-1 px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">更多<span className="sr-only">：{subscription.title}</span><ChevronDown className="size-4" /></summary>
+        <summary className="flex min-h-11 cursor-pointer items-center justify-center gap-1 whitespace-nowrap px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">更多<span className="sr-only">：{subscription.title}</span><ChevronDown className="size-4" /></summary>
         <div className="flex flex-col gap-2 border-t border-border p-2">
           {!completed || subscription.media_type === "tv" ? <Button variant="outline" className="h-11 px-3" onClick={() => onEdit(subscription)}>编辑规则</Button> : null}
           {!completed ? <Button variant="outline" className="h-11 px-3" disabled={busyKey === `${subscription.enabled ? "pause" : "resume"}:${subscription.id}`} onClick={() => onAction(subscription, subscription.enabled ? "pause" : "resume")}>{subscription.enabled ? "暂停" : "恢复"}</Button> : null}
@@ -3555,26 +3575,28 @@ function SubscriptionsPanel({
   const failedDownloadCount = downloads.filter((item) => item.status === "failed").length;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-2 text-sm" aria-label="订阅状态概览">
-        {subscriptionsUnavailable ? <span className="text-muted">订阅状态暂不可用</span> : <>
-          <span className="mr-2 text-muted">追更中 {activeCount} · 已暂停 {pausedCount}</span>
-          {attentionCount > 0 ? <Button variant="outline" className="h-11" aria-pressed={statusFilter === "attention"} onClick={() => setStatusFilter(statusFilter === "attention" ? "all" : "attention")}>需处理 {attentionCount}</Button> : null}
-        </>}
-      </div>
+    <div className="flex flex-col gap-4 sm:gap-6">
+      {/* 状态计数已经在下方筛选标签里，这里只在有订阅需要处理时给出醒目入口。 */}
+      {subscriptionsUnavailable ? <p className="text-sm text-muted">订阅状态暂不可用</p> : attentionCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm" aria-label="订阅状态概览">
+          <Button variant="outline" className="h-11 text-destructive" aria-pressed={statusFilter === "attention"} onClick={() => setStatusFilter(statusFilter === "attention" ? "all" : "attention")}>
+            <AlertCircle data-icon="inline-start" />{attentionCount} 个订阅需处理
+          </Button>
+        </div>
+      ) : null}
 
       <Card>
-        <CardHeader className="flex-row items-center justify-between gap-4">
-          <div>
+        <CardHeader className="flex-row items-center justify-between gap-4 p-4 sm:p-6">
+          <div className="min-w-0">
             <CardTitle>追剧订阅</CardTitle>
             <CardDescription>{configurationUnavailable ? "配置暂时无法读取" : `${profiles.length} 套质量配置 · ${sites.length} 个站点 · ${downloaders.length} 个下载器`}</CardDescription>
           </div>
-          <Button onClick={onAdd}>
+          <Button className="shrink-0" onClick={onAdd}>
             <Plus data-icon="inline-start" />
             添加
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-3 sm:p-6">
           {!subscriptionsUnavailable && subscriptions.length > 0 ? <div className="mb-4 flex flex-col gap-3">
             <SearchBox id="subscription-query" value={query} onChange={setQuery} placeholder="查找订阅：影视名称、原名或年份" />
             <FilterChips label="按状态筛选订阅" value={statusFilter} onChange={setStatusFilter} options={[
@@ -3593,16 +3615,15 @@ function SubscriptionsPanel({
             <EmptyState icon={Search} title={query.trim() ? `没有找到“${query.trim()}”相关的订阅` : "没有符合筛选条件的订阅"} action={{ label: "清除筛选", onClick: () => { setQuery(""); setStatusFilter("all"); } }} />
           ) : (
             <>
-              <div className="hidden lg:block">
-                <Table>
+              <div className="hidden xl:block">
+                <Table className="[&_td]:px-3 [&_th]:px-3">
                   <TableHeader>
                     <TableRow>
                       <SortableHead label="影视" sortKey="title" sort={sort} onSort={toggleSort} />
-                      <TableHead>当前目标</TableHead>
                       <TableHead>制作组 / 规则</TableHead>
                       <SortableHead label="状态" sortKey="status" sort={sort} onSort={toggleSort} />
-                      <SortableHead label="扫描时间" sortKey="scan" sort={sort} onSort={toggleSort} />
-                      <TableHead className="text-right">操作</TableHead>
+                      <SortableHead label="扫描" sortKey="scan" sort={sort} onSort={toggleSort} />
+                      <TableHead className="px-3 text-right">操作</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -3612,23 +3633,23 @@ function SubscriptionsPanel({
                       return (
                         <TableRow key={subscription.id}>
                           <TableCell>
-                            <div className="flex min-w-[230px] items-center gap-3">
-                              <Poster path={subscription.poster_path} title={subscription.title} className="w-11 shrink-0" />
+                            <div className="flex min-w-[200px] items-center gap-3">
+                              <Poster path={subscription.poster_path} title={subscription.title} className="w-10 shrink-0" />
                               <div className="min-w-0">
-                                <div className="flex max-w-[280px] items-center gap-2">
+                                <div className="flex max-w-[200px] items-center gap-2 2xl:max-w-[280px]">
                                   <div className="truncate font-semibold" title={subscription.title}><Highlight text={subscription.title} query={query} /></div>
-                                  <StatusPill label={subscriptionCategoryLabel(subscription)} />
+                                  <StatusPill label={subscriptionCategoryLabel(subscription)} size="sm" />
                                 </div>
-                                <div className="mt-0.5 text-xs text-muted">{subscription.year ?? "年份未知"}</div>
-                                <GenrePills genres={subscription.tmdb_genres} />
+                                <div className="mt-0.5 text-xs text-muted">
+                                  {subscription.year ?? "年份未知"}
+                                  {completed ? null : <> · <span className="font-medium text-foreground">{subscriptionTargetLabel(subscription)}</span></>}
+                                </div>
+                                <div className="mt-1"><GenrePills genres={subscription.tmdb_genres} size="sm" /></div>
                               </div>
                             </div>
                           </TableCell>
                           <TableCell>
-                            {subscriptionTargetLabel(subscription)}
-                          </TableCell>
-                          <TableCell>
-                            <div className="max-w-[300px] text-sm">
+                            <div className="max-w-[200px] text-sm 2xl:max-w-[300px]">
                               <GroupChain policy={normalizeGroupPolicy(subscription.group_policy)} compact />
                               <div className="mt-1 truncate text-xs text-muted">{profileNames.get(subscription.quality_profile_id) ?? `配置 #${subscription.quality_profile_id}`} · {subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、") || "无站点"}</div>
                             </div>
@@ -3637,14 +3658,14 @@ function SubscriptionsPanel({
                             <StatusPill label={status.label} tone={status.tone} />
                             {subscription.last_error ? <div className="mt-1 max-w-48 truncate text-xs text-destructive" title={subscription.last_error}>{subscription.last_error}</div> : null}
                           </TableCell>
-                          <TableCell className="text-xs text-muted">
+                          <TableCell className="whitespace-nowrap text-xs text-muted">
                             <div>上次 {formatDate(subscription.last_run_at)}</div>
                             <div className="mt-1">
                               {completed ? "无需继续扫描" : `下次 ${formatDate(subscription.next_run_at)}`}
                             </div>
                           </TableCell>
-                          <TableCell>
-                            {actions(subscription)}
+                          <TableCell className="px-3">
+                            {actions(subscription, true)}
                           </TableCell>
                         </TableRow>
                       );
@@ -3653,37 +3674,39 @@ function SubscriptionsPanel({
                 </Table>
               </div>
 
-              <div className="grid gap-3 lg:hidden">
+              <div className="grid gap-3 md:grid-cols-2 xl:hidden">
                 {visibleSubscriptions.map((subscription) => {
                   const status = subscriptionStatus(subscription);
                   const completed = subscriptionIsCompleted(subscription);
                   return (
-                    <article key={subscription.id} className="rounded-xl border border-border bg-surface-container/45 p-4">
+                    <article key={subscription.id} className="rounded-xl border border-border bg-surface-container/45 p-3 sm:p-4">
                       <div className="flex gap-3">
-                        <Poster path={subscription.poster_path} title={subscription.title} className="w-16 shrink-0" />
+                        <Poster path={subscription.poster_path} title={subscription.title} className="w-[4.5rem] shrink-0 self-start" />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <h3 className="truncate text-sm font-semibold"><Highlight text={subscription.title} query={query} /></h3>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <StatusPill label={subscriptionCategoryLabel(subscription)} />
-                                <GenrePills genres={subscription.tmdb_genres} />
-                                <span className="text-xs text-muted">{subscriptionTargetLabel(subscription, true)}</span>
-                              </div>
-                            </div>
-                            <StatusPill label={status.label} tone={status.tone} />
+                          <h3 className="line-clamp-2 text-sm font-semibold leading-5" title={subscription.title}><Highlight text={subscription.title} query={query} /></h3>
+                          {/* 状态与类型放在同一行，标题可以用满整行宽度，状态文字也不会被挤成两行。 */}
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <StatusPill label={status.label} tone={status.tone} size="sm" />
+                            <StatusPill label={subscriptionCategoryLabel(subscription)} size="sm" />
+                            <GenrePills genres={subscription.tmdb_genres} size="sm" />
                           </div>
-                          <div className="mt-3"><GroupChain policy={normalizeGroupPolicy(subscription.group_policy)} compact /></div>
-                          <div className="mt-2 grid gap-1.5 text-xs text-muted sm:grid-cols-2">
-                            <span>{profileNames.get(subscription.quality_profile_id) ?? `配置 #${subscription.quality_profile_id}`}</span>
-                            <span>{downloaderNames.get(subscription.downloader_id) ?? `下载器 #${subscription.downloader_id}`}</span>
-                            <span className="truncate sm:col-span-2">{subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、")}</span>
-                            <span>{completed ? "无需继续扫描" : `下次扫描 ${formatDate(subscription.next_run_at)}`}</span>
+                          <div className="mt-2 grid gap-1 text-xs text-muted">
+                            {completed ? null : <div className="font-medium text-foreground">{subscriptionTargetLabel(subscription, true)}</div>}
+                            <div className="truncate">
+                              {profileNames.get(subscription.quality_profile_id) ?? `配置 #${subscription.quality_profile_id}`}
+                              {" · "}
+                              {downloaderNames.get(subscription.downloader_id) ?? `下载器 #${subscription.downloader_id}`}
+                            </div>
+                            <div className="truncate" title={subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、")}>
+                              {subscription.site_ids.map((id) => siteNames.get(id) ?? `#${id}`).join("、") || "无站点"}
+                            </div>
+                            <div>{completed ? "无需继续扫描" : `下次扫描 ${formatDate(subscription.next_run_at)}`}</div>
                           </div>
                         </div>
                       </div>
-                      {subscription.last_error ? <p className="mt-3 break-words text-xs text-destructive">{subscription.last_error}</p> : null}
-                      <div className="mt-4">{actions(subscription)}</div>
+                      <div className="mt-2.5 text-xs"><GroupChain policy={normalizeGroupPolicy(subscription.group_policy)} compact /></div>
+                      {subscription.last_error ? <p className="mt-2 break-words text-xs text-destructive">{subscription.last_error}</p> : null}
+                      <div className="mt-3">{actions(subscription)}</div>
                     </article>
                   );
                 })}
@@ -3694,7 +3717,7 @@ function SubscriptionsPanel({
       </Card>
 
       <Card>
-        <CardHeader className="flex-row items-start justify-between gap-4">
+        <CardHeader className="flex-row items-start justify-between gap-4 p-4 sm:p-6">
           <div>
             <CardTitle>下载记录</CardTitle>
             <CardDescription>显示的是任务提交状态；“已提交下载器”不代表文件已经下载完成。状态统计仅针对已加载记录。</CardDescription>
@@ -3705,7 +3728,7 @@ function SubscriptionsPanel({
             {failedDownloadCount > 0 ? <StatusPill label={`${failedDownloadCount} 失败`} tone="negative" /> : null}
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-3 sm:p-6">
           {downloadsUnavailable ? <EmptyState icon={AlertCircle} title="下载记录无法读取" action={{ label: "重新读取", onClick: onRetry }} /> : downloads.length === 0 ? (
             <EmptyState icon={HardDriveDownload} title="暂无下载任务" />
           ) : (
@@ -3731,14 +3754,14 @@ function SubscriptionsPanel({
                 const canReconcileFailed = download.failed_reconciliation_allowed;
                 const reconcilingFailed = busyKey === `reconcile-failed:${download.id}`;
                 return (
-                  <div key={download.id} className="grid gap-3 rounded-2xl border border-border bg-surface-container/40 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,auto)] lg:items-center">
+                  <div key={download.id} className="grid gap-2.5 rounded-xl border border-border bg-surface-container/40 p-3 sm:gap-3 sm:rounded-2xl sm:px-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,auto)] lg:items-center">
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill label={targetLabel} />
-                        {qualityFields.map((field) => <StatusPill key={field} label={field} />)}
-                        {qualityFields.length === 0 ? <StatusPill label="质量未识别" tone="negative" /> : null}
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        <StatusPill label={targetLabel} size="sm" />
+                        {qualityFields.map((field) => <StatusPill key={field} label={field} size="sm" />)}
+                        {qualityFields.length === 0 ? <StatusPill label="质量未识别" tone="negative" size="sm" /> : null}
                       </div>
-                      <div className="mt-2 line-clamp-2 text-sm font-semibold" title={download.title}><Highlight text={download.title} query={downloadQuery} /></div>
+                      <div className="mt-1.5 line-clamp-2 text-sm font-semibold leading-5 [overflow-wrap:anywhere] sm:mt-2" title={download.title}><Highlight text={download.title} query={downloadQuery} /></div>
                       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
                         <span>{download.source_site}</span>
                         <span>{formatBytes(download.size)}</span>
@@ -3755,8 +3778,10 @@ function SubscriptionsPanel({
                       ) : null}
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
-                      <span className="text-xs text-muted">{download.downloader_name}</span>
-                      <StatusPill label={downloadStatus(download.status)} tone={downloadTone(download.status)} />
+                      <span className="mr-auto inline-flex min-w-0 items-center gap-2 lg:mr-0">
+                        <StatusPill label={downloadStatus(download.status)} tone={downloadTone(download.status)} size="sm" />
+                        <span className="truncate text-xs text-muted">{download.downloader_name}</span>
+                      </span>
                       {download.status === "submitted" ? (
                         <Button
                           variant="outline"
@@ -4215,9 +4240,9 @@ function TmdbPanel({
   onOpenCharts: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-6">
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="p-4 sm:p-6">
           <form className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]" onSubmit={onSearch} aria-label="在 TMDB 中查找影视">
             <div className="flex flex-col gap-2">
               <Label htmlFor="tmdb-query">影视名称</Label>
@@ -4633,14 +4658,18 @@ function ResourcesPanel({
     [deferredLocalQuery, scopeFilter, scopedCandidates],
   );
   const acceptedCount = visibleCandidates.filter(({ candidate }) => candidate.decision?.accepted).length;
+  // 一次搜索常有几百条结果，全部渲染在手机上会拉出十万像素长的页面；分批显示，筛选变化时回到第一批。
+  const [shownCount, setShownCount] = useState(CANDIDATE_PAGE_SIZE);
+  useEffect(() => setShownCount(CANDIDATE_PAGE_SIZE), [candidates, scopeFilter, deferredLocalQuery]);
+  const shownCandidates = visibleCandidates.slice(0, shownCount);
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-6">
       <Card>
-        <CardHeader>
+        <CardHeader className="p-4 sm:p-6">
           <CardTitle>资源搜索</CardTitle>
           <CardDescription>{sites.length} 个可用搜索源</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-4 sm:p-6">
           <form className="flex flex-col gap-5" onSubmit={onSearch}>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="flex flex-col gap-2 md:col-span-2">
@@ -4705,7 +4734,7 @@ function ResourcesPanel({
         <LoadingState label="正在并发搜索站点" />
       ) : candidates.length > 0 ? (
         <Card>
-          <CardHeader className="flex-row items-center justify-between gap-4">
+          <CardHeader className="flex-row items-center justify-between gap-4 p-4 sm:p-6">
             <div>
               <CardTitle>候选资源</CardTitle>
               <CardDescription aria-live="polite">
@@ -4716,7 +4745,7 @@ function ResourcesPanel({
               </CardDescription>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-3 sm:p-6">
             <div className="mb-5 border-b border-border pb-5">
               <div className="max-w-2xl">
                 <Label htmlFor="resource-local-query">本地快速查找</Label>
@@ -4776,7 +4805,7 @@ function ResourcesPanel({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {visibleCandidates.map(({ candidate, localScope }) => (
+                      {shownCandidates.map(({ candidate, localScope }) => (
                         <TableRow key={candidate.key}>
                           <TableCell>
                             <div className="max-w-[380px]">
@@ -4811,33 +4840,42 @@ function ResourcesPanel({
                   </Table>
                 </div>
 
-                <div className="grid gap-3 xl:hidden">
-                  {visibleCandidates.map(({ candidate, localScope }) => (
-                    <article key={candidate.key} className="rounded-xl border border-border bg-surface-container/45 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <h3 className="line-clamp-2 text-sm font-semibold">{candidate.result.title}</h3>
-                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-                            <SourceSiteBadge name={candidate.result.source_site} compact />
-                            <span>{formatBytes(candidate.result.size)}</span>
-                            <span>{candidate.result.seeders} 做种</span>
-                          </div>
-                          <div className="mt-2"><LocalScopeBadge scope={localScope} /></div>
-                        </div>
-                        <DecisionBadge candidate={candidate} />
+                <div className="grid gap-2.5 xl:hidden">
+                  {shownCandidates.map(({ candidate, localScope }) => (
+                    <article key={candidate.key} className="rounded-xl border border-border bg-surface-container/45 p-3 sm:p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold leading-5 [overflow-wrap:anywhere]" title={candidate.result.title}>{candidate.result.title}</h3>
+                        <DecisionBadge candidate={candidate} size="sm" />
                       </div>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <ReleaseSummary candidate={candidate} />
-                        <DecisionSummary candidate={candidate} />
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                        <span className="font-semibold text-foreground">{candidate.result.source_site}</span>
+                        <span>{formatBytes(candidate.result.size)}</span>
+                        <span>{candidate.result.seeders} 做种</span>
+                        {candidate.result.publish_time ? <span>{formatDate(candidate.result.publish_time)}</span> : null}
                       </div>
-                      <div className="mt-4 flex justify-end">
-                        <Button variant={queuedCandidateKeys.has(candidate.key) ? "outline" : candidateNeedsOverride(candidate) ? "destructive" : "default"} className="h-8 px-3" disabled={busyKey === `queue:${candidate.key}`} onClick={() => onQueue(candidate)}>
+                      {/* 季集只显示一次（本地识别结果），质量标签里不再重复。 */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <LocalScopeBadge scope={localScope} />
+                        {candidate.parseError ? <span className="text-xs text-destructive">解析失败</span>
+                          : releaseQualityFields(candidate.release).filter((field) => field !== releaseScopeLabel(candidate.release)).map((field) => <StatusPill key={field} label={field} size="sm" />)}
+                      </div>
+                      {candidate.decision ? <div className="mt-2"><DecisionSummary candidate={candidate} hideBadge /></div> : null}
+                      <div className="mt-2.5 flex justify-end">
+                        <Button variant={queuedCandidateKeys.has(candidate.key) ? "outline" : candidateNeedsOverride(candidate) ? "destructive" : "default"} className="h-9 px-3" disabled={busyKey === `queue:${candidate.key}`} onClick={() => onQueue(candidate)}>
                           {busyKey === `queue:${candidate.key}` ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : queuedCandidateKeys.has(candidate.key) ? <RefreshCw data-icon="inline-start" /> : <Download data-icon="inline-start" />}
                           {queuedCandidateKeys.has(candidate.key) ? "检查并重新入队" : candidateNeedsOverride(candidate) ? "覆盖入队" : "加入下载队列"}
                         </Button>
                       </div>
                     </article>
                   ))}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 px-1 text-xs text-muted">
+                  <span>已显示 {shownCandidates.length} / {visibleCandidates.length} 条</span>
+                  {shownCandidates.length < visibleCandidates.length ? (
+                    <Button variant="outline" className="h-9 px-3" onClick={() => setShownCount((count) => count + CANDIDATE_PAGE_SIZE)}>
+                      <ChevronDown data-icon="inline-start" />再显示 {Math.min(CANDIDATE_PAGE_SIZE, visibleCandidates.length - shownCandidates.length)} 条
+                    </Button>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -4900,10 +4938,10 @@ function subscriptionCategoryLabel(subscription: Subscription): string {
   return subscription.tmdb_is_animation ? "动漫" : "电视剧";
 }
 
-function GenrePills({ genres }: { genres: TmdbGenre[] }) {
+function GenrePills({ genres, size = "md" }: { genres: TmdbGenre[]; size?: "md" | "sm" }) {
   if (!genres?.length) return null;
   return <div className="flex flex-wrap gap-1">{genres.map((genre) => (
-    <StatusPill key={genre.id} label={genre.name} />
+    <StatusPill key={genre.id} label={genre.name} size={size} />
   ))}</div>;
 }
 
@@ -4955,9 +4993,9 @@ function ReleaseSummary({ candidate }: { candidate: ResourceCandidate }) {
   );
 }
 
-function DecisionBadge({ candidate }: { candidate: ResourceCandidate }) {
-  if (!candidate.decision) return <StatusPill label="未评估" />;
-  return <StatusPill label={candidate.decision.accepted ? `${candidate.decision.score} 分` : "已拒绝"} tone={candidate.decision.accepted ? "positive" : "negative"} />;
+function DecisionBadge({ candidate, size }: { candidate: ResourceCandidate; size?: "md" | "sm" }) {
+  if (!candidate.decision) return <StatusPill label="未评估" size={size} />;
+  return <StatusPill label={candidate.decision.accepted ? `${candidate.decision.score} 分` : "已拒绝"} tone={candidate.decision.accepted ? "positive" : "negative"} size={size} />;
 }
 
 function rejectionText(rejection: MatchRejection): string {
@@ -4977,7 +5015,7 @@ function rejectionText(rejection: MatchRejection): string {
   return labels[rejection.code] ?? rejection.message;
 }
 
-function DecisionSummary({ candidate }: { candidate: ResourceCandidate }) {
+function DecisionSummary({ candidate, hideBadge = false }: { candidate: ResourceCandidate; hideBadge?: boolean }) {
   if (!candidate.decision) return <span className="text-xs text-muted">未关联目标</span>;
   if (candidate.decision.accepted) {
     const breakdown = Object.entries(candidate.decision.breakdown)
@@ -4986,16 +5024,16 @@ function DecisionSummary({ candidate }: { candidate: ResourceCandidate }) {
       .join(" · ");
     return (
       <div className="max-w-64 text-xs">
-        <DecisionBadge candidate={candidate} />
-        {breakdown ? <div className="mt-1.5 text-muted">{breakdown}</div> : null}
+        {hideBadge ? null : <DecisionBadge candidate={candidate} />}
+        {breakdown ? <div className={cn("text-muted", !hideBadge && "mt-1.5")}>{breakdown}</div> : null}
         <CandidateRankingSummary candidate={candidate} />
       </div>
     );
   }
   return (
     <div className="max-w-64 text-xs">
-      <DecisionBadge candidate={candidate} />
-      <div className="mt-1.5 text-destructive" title={candidate.decision.rejections.map(rejectionText).join("；")}>
+      {hideBadge ? null : <DecisionBadge candidate={candidate} />}
+      <div className={cn("text-destructive", !hideBadge && "mt-1.5")} title={candidate.decision.rejections.map(rejectionText).join("；")}>
         {candidate.decision.rejections.map(rejectionText).join("；") || "不符合匹配规则"}
       </div>
     </div>
@@ -5072,7 +5110,7 @@ function SettingsPanel({
 }) {
   const [section, setSection] = useHashChoice("section", SETTINGS_SECTIONS, "media");
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-6">
       <div role="tablist" aria-label="设置分区" className="flex flex-wrap gap-2 border-b border-border pb-3">
         {SETTINGS_SECTIONS.map((key, index) => <button key={key} type="button" role="tab"
           id={`settings-tab-${key}`} aria-controls={`settings-panel-${key}`} aria-selected={section === key}
@@ -5090,11 +5128,11 @@ function SettingsPanel({
       </div>
       <div id="settings-panel-media" role="tabpanel" aria-labelledby="settings-tab-media" hidden={section !== "media"}>
       {settingsUnavailable ? <EmptyState icon={AlertCircle} title="媒体设置无法读取，暂不能编辑" action={{ label: "重新读取", onClick: onRetry }} /> : <Card>
-        <CardHeader>
+        <CardHeader className="p-4 sm:p-6">
           <CardTitle>媒体设置</CardTitle>
           <CardDescription>TMDB 与自动扫描</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-5">
+        <CardContent className="flex flex-col gap-5 p-4 sm:p-6">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <div className="flex flex-col gap-2 md:col-span-2 xl:col-span-3">
               <div className="flex items-center justify-between gap-3">
@@ -5165,7 +5203,7 @@ function SettingsPanel({
 
       <div id="settings-panel-quality" role="tabpanel" aria-labelledby="settings-tab-quality" hidden={section !== "quality"}>
       {profilesUnavailable ? <EmptyState icon={AlertCircle} title="质量配置无法读取，暂不能编辑" action={{ label: "重新读取", onClick: onRetry }} /> : <Card>
-        <CardHeader className="flex-row items-center justify-between gap-4">
+        <CardHeader className="flex-row items-center justify-between gap-4 p-4 sm:p-6">
           <div>
             <CardTitle>质量配置</CardTitle>
             <CardDescription>{profiles.length} 套下载规则</CardDescription>
@@ -5179,7 +5217,7 @@ function SettingsPanel({
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-4 sm:p-6">
           {profiles.length === 0 ? (
             <EmptyState icon={SlidersHorizontal} title="暂无质量配置" action={{ label: "新建配置", onClick: onAddQuality }} />
           ) : (

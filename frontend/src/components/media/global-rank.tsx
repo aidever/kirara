@@ -213,6 +213,19 @@ function RankCover({ item, square = false, className }: { item: RankItem; square
 // 小组件
 // ---------------------------------------------------------------------------
 
+/** 一组切换标签：手机上单行横向滑动（贴边出血），宽屏自动换行。 */
+function ChipRow({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      role="tablist"
+      aria-label={label}
+      className={cn("no-scrollbar -mx-3 flex gap-2 overflow-x-auto px-3 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0", className)}
+    >
+      {children}
+    </div>
+  );
+}
+
 function Chip({ selected, onClick, children, size = "md" }: { selected: boolean; onClick: () => void; children: React.ReactNode; size?: "md" | "sm" }) {
   return (
     <button
@@ -220,7 +233,7 @@ function Chip({ selected, onClick, children, size = "md" }: { selected: boolean;
       role="tab"
       aria-selected={selected}
       className={cn(
-        "cursor-pointer whitespace-nowrap border font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "shrink-0 cursor-pointer whitespace-nowrap border font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         size === "md" ? "h-8 rounded-full px-3 text-xs" : "h-7 rounded-lg px-2.5 text-xs",
         selected ? "border-primary/30 bg-primary/10 text-foreground" : "border-border text-muted hover:bg-accent hover:text-foreground",
       )}
@@ -240,7 +253,7 @@ function RankBadge({ rank }: { rank: number }) {
 }
 
 function NewBadge() {
-  return <span className="ml-1.5 inline-flex rounded bg-primary/10 px-1 align-middle text-[11px] font-semibold text-primary">新上榜</span>;
+  return <span className="ml-1.5 inline-flex whitespace-nowrap rounded bg-primary/10 px-1 align-middle text-[11px] font-semibold text-primary">新上榜</span>;
 }
 
 type Stat = [label: string, value: string | null | undefined];
@@ -418,7 +431,7 @@ function MediaCard({ board, item, actions }: { board: RankBoard; item: RankItem;
   const openDetail = () =>
     actions.onOpenDetail({
       title: item.title,
-      description: rows.filter((row) => row.value && !row.muted && row.label !== "主演").map((row) => `${row.label} ${row.value}`).join(" · "),
+      description: rows.filter((row) => row.value && !row.muted && row.label !== "主演").map((row) => (row.value?.startsWith(row.label) ? row.value : `${row.label} ${row.value}`)).join(" · "),
       mediaType: type,
       douban: item.douban ?? null,
       tmdb: item.tmdb ?? null,
@@ -427,7 +440,7 @@ function MediaCard({ board, item, actions }: { board: RankBoard; item: RankItem;
     });
 
   return (
-    <li className="group relative flex gap-3 rounded-xl border border-border bg-card p-2.5 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/40">
+    <li className="group relative flex min-w-0 gap-3 rounded-xl border border-border bg-card p-2.5 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/40">
       {/* 整张卡片都可以打开详情；卡片里的按钮和链接位于其上层。 */}
       <button type="button" aria-label={`查看「${item.title}」详情`} className="absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" onClick={openDetail} />
       <div className="pointer-events-none relative w-[92px] shrink-0 self-start">
@@ -440,10 +453,11 @@ function MediaCard({ board, item, actions }: { board: RankBoard; item: RankItem;
         </div>
       </div>
       <div className="pointer-events-none flex min-w-0 flex-1 flex-col gap-1.5">
-        <h5 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
-          <span className={cn("shrink-0 rounded-md px-1.5 text-xs tabular-nums", item.rank <= 3 ? "bg-primary text-primary-foreground" : "bg-surface-container text-muted")}>{item.rank}</span>
-          <span className="truncate" title={item.title}>{item.title}</span>
-          {item.year ? <span className="shrink-0 font-normal text-muted">({item.year})</span> : null}
+        {/* 标题最多两行：手机上片名、年份和“新上榜”挤在一行时，单行截断会只剩两三个字。 */}
+        <h5 className="line-clamp-2 text-sm font-semibold leading-5" title={item.title}>
+          <span className={cn("mr-1.5 inline-block rounded-md px-1.5 align-[1px] text-xs leading-[18px] tabular-nums", item.rank <= 3 ? "bg-primary text-primary-foreground" : "bg-surface-container text-muted")}>{item.rank}</span>
+          {item.title}
+          {item.year ? <span className="ml-1 whitespace-nowrap font-normal text-muted">({item.year})</span> : null}
           {item.new_entry ? <NewBadge /> : null}
         </h5>
         <Ratings item={item} />
@@ -468,7 +482,7 @@ function MediaCard({ board, item, actions }: { board: RankBoard; item: RankItem;
 
 function MediaGrid({ board, actions }: { board: RankBoard; actions: MediaActions }) {
   return (
-    <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+    <ol className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {board.items.map((item) => (
         <MediaCard key={`${board.key}:${item.rank}:${item.original_title ?? item.title}`} board={board} item={item} actions={actions} />
       ))}
@@ -486,13 +500,13 @@ function MaoyanBoards({ boards, actions }: { boards: RankBoard[]; actions: Media
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="榜单">
+      <ChipRow label="榜单">
         {charts.map((item) => <Chip key={item.value} selected={activeChart === item.value} onClick={() => setChart(item.value)}>{item.label}</Chip>)}
-      </div>
+      </ChipRow>
       {chartBoards.length > 1 ? (
-        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="平台">
+        <ChipRow label="平台" className="gap-1.5">
           {chartBoards.map((board) => <Chip key={board.key} size="sm" selected={active?.key === board.key} onClick={() => setPlatform(board.group)}>{board.group_name}</Chip>)}
-        </div>
+        </ChipRow>
       ) : null}
       {active ? (
         <>
@@ -513,11 +527,11 @@ function NetflixBoards({ boards, actions }: { boards: RankBoard[]; actions: Medi
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label="地区">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <ChipRow label="地区" className="min-w-0 sm:flex-1">
           {regions.map((item) => <Chip key={item.value} selected={activeRegion === item.value} onClick={() => setRegion(item.value)}>{item.label}</Chip>)}
-        </div>
-        <div className="ml-auto flex gap-1.5" role="tablist" aria-label="类型">
+        </ChipRow>
+        <div className="flex gap-1.5 sm:ml-auto" role="tablist" aria-label="类型">
           <Chip size="sm" selected={kind === "tv"} onClick={() => setKind("tv")}>剧集</Chip>
           <Chip size="sm" selected={kind === "movie"} onClick={() => setKind("movie")}>电影</Chip>
         </div>
@@ -544,7 +558,7 @@ function HongguoCard({ item }: { item: RankItem }) {
     item.paid === false ? "免费" : item.paid ? "付费" : null,
   ].filter(Boolean).join(" · ");
   return (
-    <li className="flex gap-3 rounded-xl border border-border bg-card p-3">
+    <li className="flex min-w-0 gap-3 rounded-xl border border-border bg-card p-3">
       <div className="relative w-20 shrink-0 self-start">
         <RankCover item={item} />
         <RankBadge rank={item.rank} />
@@ -594,11 +608,11 @@ function HongguoBoards({ boards }: { boards: RankBoard[] }) {
   const active = boards.find((board) => board.key === key) ?? boards[0];
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="榜单">
+      <ChipRow label="榜单">
         {boards.map((board) => <Chip key={board.key} selected={active.key === board.key} onClick={() => setKey(board.key)}>{board.name.replace(/^红果/, "")}</Chip>)}
-      </div>
+      </ChipRow>
       <BoardHeader board={active} />
-      <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <ol className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {active.items.map((item) => <HongguoCard key={`${active.key}:${item.series_id ?? item.rank}:${item.title}`} item={item} />)}
       </ol>
     </div>
@@ -634,18 +648,18 @@ function MusicBoards({ boards }: { boards: RankBoard[] }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="平台">
+      <ChipRow label="平台">
         {platforms.map((item) => <Chip key={item.value} selected={activePlatform === item.value} onClick={() => setPlatform(item.value)}>{item.label}</Chip>)}
-      </div>
+      </ChipRow>
       {platformBoards.length > 1 ? (
-        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="榜单">
+        <ChipRow label="榜单" className="gap-1.5">
           {platformBoards.map((board) => <Chip key={board.key} size="sm" selected={active?.key === board.key} onClick={() => setBoardKey(board.key)}>{board.name}</Chip>)}
-        </div>
+        </ChipRow>
       ) : null}
       {active ? (
         <>
           <BoardHeader board={active} title={`${active.group_name} · ${active.name}`} />
-          <ol className="grid gap-x-6 rounded-xl border border-border bg-card px-2 py-1 lg:grid-cols-2">
+          <ol className="grid grid-cols-1 gap-x-6 rounded-xl border border-border bg-card px-2 py-1 lg:grid-cols-2">
             {active.items.map((item) => (
               <li key={`${active.key}:${item.rank}:${item.song_id ?? item.title}`} className="flex min-w-0 items-center gap-3 border-b border-border/60 px-1 py-2 last:border-b-0 lg:[&:nth-last-child(2):nth-child(odd)]:border-b-0">
                 <div className="flex w-7 shrink-0 flex-col items-center">
@@ -686,7 +700,7 @@ function SourceCard({ summary, selected, onSelect }: { summary: RankSourceSummar
       aria-selected={selected}
       onClick={onSelect}
       className={cn(
-        "flex min-w-0 cursor-pointer flex-col gap-1 rounded-xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "flex min-w-0 cursor-pointer flex-col gap-0.5 rounded-xl border px-3 py-2.5 text-left sm:gap-1 sm:p-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         selected ? "border-primary/40 bg-primary/5 shadow-sm" : "border-border bg-card hover:bg-accent",
         !summary.enabled && "opacity-70",
       )}
@@ -700,7 +714,7 @@ function SourceCard({ summary, selected, onSelect }: { summary: RankSourceSummar
         ) : null}
         {!summary.enabled ? <span className="ml-auto shrink-0 rounded bg-surface-container px-1.5 text-[11px] text-muted">未启用</span> : null}
       </span>
-      <span className="truncate text-[11px] text-muted">{summary.origin}</span>
+      <span className="hidden truncate text-[11px] text-muted sm:block">{summary.origin}</span>
       {summary.enabled ? (
         <>
           <span className="text-xs tabular-nums">
@@ -708,9 +722,9 @@ function SourceCard({ summary, selected, onSelect }: { summary: RankSourceSummar
             {summary.stale_count > 0 ? <span className="text-amber-700"> · {summary.stale_count} 个沿用旧数据</span> : null}
           </span>
           {media && summary.item_count > 0 ? (
-            <span className="text-[11px] tabular-nums text-muted">豆瓣评分 {summary.rated_count} · 可订阅 {summary.matched_count}</span>
+            <span className="hidden text-[11px] tabular-nums text-muted sm:block">豆瓣评分 {summary.rated_count} · 可订阅 {summary.matched_count}</span>
           ) : summary.source === "hongguo" && summary.item_count > 0 ? (
-            <span className="text-[11px] tabular-nums text-muted">站内评分 {summary.rated_count}</span>
+            <span className="hidden text-[11px] tabular-nums text-muted sm:block">站内评分 {summary.rated_count}</span>
           ) : null}
           <span className="text-[11px] text-muted">{updated ? `更新于 ${updated}` : " "}</span>
         </>
@@ -801,9 +815,9 @@ export function GlobalRankBoard({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold">全球榜单</h3>
-          <p className="text-xs text-muted">猫眼、Netflix、红果短剧与音乐榜，复刻 MoviePilot 插件 GlobalRankPro。</p>
+          <p className="hidden text-xs text-muted sm:block">猫眼、Netflix、红果短剧与音乐榜，复刻 MoviePilot 插件 GlobalRankPro。</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto sm:flex-wrap">
           <Button variant="outline" className="h-8 px-3" onClick={() => setHistoryOpen(true)}><History data-icon="inline-start" />订阅记录</Button>
           <Button variant="outline" className="h-8 px-3" onClick={() => setSettingsOpen(true)}><Settings2 data-icon="inline-start" />榜单设置</Button>
           <Button variant="outline" className="h-8 px-3" disabled={anyRefreshing} onClick={() => void refresh("all")}>
@@ -817,7 +831,7 @@ export function GlobalRankBoard({
           item ? (
             <SourceCard key={item.source} summary={item} selected={source === item.source} onSelect={() => setSource(item.source)} />
           ) : (
-            <div key={SOURCE_KEYS[index]} className="h-[104px] animate-pulse rounded-xl border border-border bg-surface-container/50" />
+            <div key={SOURCE_KEYS[index]} className="h-[76px] animate-pulse sm:h-[104px] rounded-xl border border-border bg-surface-container/50" />
           ),
         )}
       </div>

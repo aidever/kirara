@@ -160,7 +160,7 @@ At 1024px and above, the shell is a viewport-height grid with a fixed 256px navi
 
 Below 1024px, the rail becomes a modal menu (85vw, maximum 320px), with safe-area-aware outer padding and its own scroll region. A fixed dock offers four destinations plus the full menu. The dock is 92% wide, capped at 440px, and sits at `max(24px, env(safe-area-inset-bottom))`. Content bottom padding is `calc(110px + env(safe-area-inset-bottom, 0px))` throughout this mobile/tablet range. Preserve that clearance so final actions can scroll above the dock.
 
-Page descriptions appear from 1024px and the clock from 1280px. Transparent companion art appears beside the header at 1280px, occupying 120px by 80px. The sidebar landscape uses a 136px-high crop and disappears at viewport heights of 850px or less, leaving more space for navigation. Media task tabs use two columns below 1024px and four above. Forms commonly gain two columns at 640px, while wide tables retain horizontal scrolling instead of squeezing all columns. Shared card header/content padding is 24px; some page and dialog bodies use 16px, increasing to 24px at 640px. Main groups use 16–24px gaps; smaller control groups use 8–12px.
+Page descriptions appear from 1024px and the clock from 1280px. Transparent companion art appears beside the header at 1280px, occupying 120px by 80px. The sidebar landscape uses a 136px-high crop and disappears at viewport heights of 850px or less, leaving more space for navigation. Media task tabs stay one row of five at every width: below 640px each tab stacks a 16px icon over a 12px label, from 640px icon and label sit side by side. Forms commonly gain two columns at 640px, while wide tables retain horizontal scrolling instead of squeezing all columns. Shared card header/content padding is 24px; some page and dialog bodies use 16px, increasing to 24px at 640px. On phones, list-heavy cards (media subscriptions, download records, resource candidates) drop to 16px headers and 12px content so list items are not boxed in three layers of 24px padding. Main groups use 16–24px gaps; smaller control groups use 8–12px.
 
 ## Elevation & Depth
 
@@ -229,6 +229,10 @@ The dark slate log console, local status colors, isolated peach trophy accent, u
 - Do keep active navigation identifiable through the selected fill, pale text and diamond as well as color.
 - Do preserve readable Chinese labels, numeric alignment and keyboard focus.
 - Do reserve bottom clearance throughout the mobile and tablet layout.
+- Do give every single-column list grid an explicit `grid-cols-1` (and `min-w-0` items). An implicit grid track grows to its longest unbreakable line, so one long English title pushes the whole list off-screen on phones.
+- Do let long filter/chip sets scroll horizontally in one row on phones (bleeding to the 12px gutter) instead of wrapping into three or four rows; wrap from 640px.
+- Do page long result lists (30 at a time) rather than rendering hundreds of cards on a phone.
+- Don't repeat the same fact on a mobile card (status in both a pill and a sentence, season/episode in both a scope badge and a quality pill, counts already shown on filter chips).
 - Do keep generation prompts and asset provenance with shipping raster files and desktop derivatives.
 - Do keep configuration feedback by save controls and retry errors beside the affected result.
 
