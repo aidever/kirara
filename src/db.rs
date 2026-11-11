@@ -22,6 +22,7 @@ mod ptd_backup;
 pub mod rss;
 mod scheduled_task;
 pub mod search;
+mod update_check;
 mod webdav;
 
 pub use media_upgrade::NewMediaGroupUpgrade;
@@ -97,6 +98,7 @@ impl Database {
         db.init_webdav().await?;
         db.init_rss().await?;
         db.init_scheduled_tasks().await?;
+        db.init_update_check().await?;
         Ok(db)
     }
 

@@ -26,6 +26,7 @@ mod site_stats;
 mod stats;
 mod tag_rule;
 mod torrent_watcher;
+mod update_check;
 mod web;
 mod webdav;
 

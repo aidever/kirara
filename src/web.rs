@@ -81,6 +81,7 @@ pub struct AppState {
     relocation_scheduler: Arc<RelocationScheduler>,
     self_use: bool,
     shutdown: CancellationToken,
+    update_checker: Arc<crate::update_check::UpdateChecker>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +122,7 @@ impl AppState {
     ) -> Self {
         Self {
             scheduled_task_scheduler: crate::scheduled_task::Scheduler::new(db.clone()),
+            update_checker: crate::update_check::UpdateChecker::new(db.clone()),
             db,
             scheduler,
             sign_in_scheduler,
@@ -181,6 +183,7 @@ pub async fn serve(
             .start(shutdown.clone()),
     );
     state.shutdown = shutdown.clone();
+    tokio::spawn(state.update_checker.clone().start(shutdown.clone()));
     let app = app_router(state, relocation_scheduler);
     if matches!(&addr, ListenEndpoint::Tcp(addr) if !addr.ip().is_loopback()) {
         warn!(
@@ -216,6 +219,7 @@ fn app_router(state: AppState, relocation_scheduler: Arc<RelocationScheduler>) -
     let media_scheduler = Arc::clone(&state.media_scheduler);
     let rss = Arc::clone(&state.rss);
     let self_use = state.self_use;
+    let update_checker = Arc::clone(&state.update_checker);
     Router::new()
         .route("/api/sites/search", get(search::sites))
         .route("/api/sign-in-tasks/search", get(search::sign_tasks))
@@ -386,6 +390,7 @@ fn app_router(state: AppState, relocation_scheduler: Arc<RelocationScheduler>) -
         )
         .merge(crate::webdav::management_router(dav_db))
         .nest("/api/rss", rss::router(rss))
+        .merge(crate::update_check::router(update_checker))
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
                 info_span!(
@@ -5799,7 +5804,7 @@ fn validate_tag_rule(req: &crate::tag_rule::TagRuleRequest) -> Result<(), ApiErr
 }
 
 #[derive(Debug)]
-struct ApiError {
+pub(crate) struct ApiError {
     status: StatusCode,
     message: String,
 }

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { Select } from "@/components/ui/select";
+import { UpdateCheckCard } from "@/components/update-check";
 import { api } from "@/lib/api";
 import type { GlobalConfig, ProxyTestResult } from "@/types";
 
@@ -115,6 +116,7 @@ export function SystemSettingsPage({
   };
 
   return (
+    <div className="flex flex-col gap-4">
     <Card>
       <form
         onSubmit={(event) => {
@@ -269,5 +271,7 @@ export function SystemSettingsPage({
       </CardContent>
       </form>
     </Card>
+    <UpdateCheckCard />
+    </div>
   );
 }

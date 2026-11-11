@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type SVGProps } from "react";
+import { UpdateNotice } from "@/components/update-check";
 import {
   BarChart3,
   BookOpen,
@@ -560,6 +561,8 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <UpdateNotice />
 
       <div className="kirara-menu-search relative shrink-0">
         <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted" aria-hidden="true" />
