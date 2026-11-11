@@ -201,6 +201,8 @@ pub struct MediaDownloadCoverage {
     pub season: Option<u32>,
     pub episodes: Vec<u32>,
     pub absolute_episodes: Vec<u32>,
+    /// 整季包：覆盖本季已播出的全部集。
+    pub full_season: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -1590,6 +1590,72 @@ impl Database {
         .map_err(join_error)?
     }
 
+    /// 当前季是否已全部播出：TMDB 给出的每一集播出日期都已过去。
+    /// 是则返回本季最后一集，单集目标此时默认接受整季包。
+    pub async fn season_fully_aired_last_episode(
+        &self,
+        subscription_id: i64,
+        season: Option<u32>,
+    ) -> Result<Option<u32>, AppError> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            let today = Utc::now().format("%Y-%m-%d").to_string();
+            let (dated, future, undated_open, last): (i64, i64, i64, Option<u32>) = conn
+                .query_row(
+                    "SELECT
+                        COALESCE(SUM(air_date IS NOT NULL), 0),
+                        COALESCE(SUM(air_date IS NOT NULL AND air_date > ?3), 0),
+                        COALESCE(SUM(air_date IS NULL
+                                     AND status IN ('pending', 'queued', 'submitted')), 0),
+                        MAX(CASE WHEN air_date IS NOT NULL THEN episode END)
+                     FROM subscription_targets
+                     WHERE subscription_id = ?1 AND season IS ?2 AND episode IS NOT NULL",
+                    params![subscription_id, season, today],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .map_err(sql_error)?;
+            Ok((dated > 0 && future == 0 && undated_open == 0)
+                .then_some(last)
+                .flatten())
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    /// 订阅目标下在 `since` 之后彻底失败过的资源：(站点, 种子 ID) -> 失败原因。
+    pub async fn list_recent_failed_releases(
+        &self,
+        subscription_id: i64,
+        target_key: &str,
+        since: &str,
+    ) -> Result<HashMap<(i64, String), String>, AppError> {
+        let path = self.path.clone();
+        let target_key = target_key.to_string();
+        let since = since.to_string();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path)?;
+            let mut statement = conn
+                .prepare(
+                    "SELECT site_id, torrent_id, COALESCE(last_error, '')
+                     FROM media_failed_releases
+                     WHERE subscription_id = ? AND target_key = ? AND failed_at >= ?",
+                )
+                .map_err(sql_error)?;
+            let rows = statement
+                .query_map(params![subscription_id, target_key, since], |row| {
+                    Ok((
+                        (row.get::<_, i64>(0)?, row.get::<_, String>(1)?),
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(sql_error)?;
+            rows.collect::<Result<HashMap<_, _>, _>>().map_err(sql_error)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
     pub async fn enqueue_media_download(
         &self,
         request: &NewMediaDownload,
@@ -2707,6 +2773,7 @@ impl Database {
             let submission_known_absent =
                 submission_confirmed_absent || download.status == "fetching";
             if changed > 0 && status == "failed" && submission_known_absent {
+                record_failed_release(&tx, &download, &error, &now_text)?;
                 reset_subscription_after_failed_download(&tx, &download, &error, &now_text)?;
             }
             tx.commit().map_err(sql_error)?;
@@ -3051,12 +3118,9 @@ fn recover_media_download_records(
         }
         recovered += changed;
         if download.status == "fetching" && download.attempts >= MEDIA_DOWNLOAD_MAX_ATTEMPTS {
-            reset_subscription_after_failed_download(
-                conn,
-                download,
-                "download delivery failed after lease recovery",
-                now,
-            )?;
+            let error = "download delivery failed after lease recovery";
+            record_failed_release(conn, download, error, now)?;
+            reset_subscription_after_failed_download(conn, download, error, now)?;
         }
     }
     Ok(recovered)
@@ -3578,6 +3642,40 @@ fn enqueue_media_download_row(
     })
 }
 
+/// 记住订阅目标下彻底失败的那条资源，下一轮扫描会先换其他候选，
+/// 避免同一个失效种子被反复选中、重试。
+fn record_failed_release(
+    conn: &Connection,
+    download: &MediaDownloadRecord,
+    error: &str,
+    now: &str,
+) -> Result<(), AppError> {
+    let (Some(subscription_id), Some(site_id)) = (download.subscription_id, download.site_id)
+    else {
+        return Ok(());
+    };
+    let error = error.chars().take(2_000).collect::<String>();
+    conn.execute(
+        "INSERT INTO media_failed_releases
+         (subscription_id, target_key, site_id, torrent_id, title, last_error, failed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(subscription_id, target_key, site_id, torrent_id) DO UPDATE SET
+            title = excluded.title, last_error = excluded.last_error,
+            failed_at = excluded.failed_at",
+        params![
+            subscription_id,
+            download.target_key,
+            site_id,
+            download.torrent_id,
+            download.title,
+            error,
+            now,
+        ],
+    )
+    .map_err(sql_error)?;
+    Ok(())
+}
+
 fn reset_subscription_after_failed_download(
     conn: &Connection,
     download: &MediaDownloadRecord,
@@ -3720,6 +3818,23 @@ fn coverage_season_matches(coverage_season: Option<u32>, subscription_season: Op
     }
 }
 
+/// 本季已经播出的最后一集（按 TMDB 播出日期）。
+fn last_aired_season_episode(
+    conn: &Connection,
+    subscription_id: i64,
+    season: Option<u32>,
+) -> Result<Option<u32>, AppError> {
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    conn.query_row(
+        "SELECT MAX(episode) FROM subscription_targets
+         WHERE subscription_id = ? AND season IS ? AND episode IS NOT NULL
+           AND air_date IS NOT NULL AND air_date <= ?",
+        params![subscription_id, season, today],
+        |row| row.get::<_, Option<u32>>(0),
+    )
+    .map_err(sql_error)
+}
+
 fn materialize_covered_subscription_targets(
     conn: &Connection,
     subscription: &SubscriptionRecord,
@@ -3749,6 +3864,11 @@ fn materialize_covered_subscription_targets(
         }
     } else if coverage_season_matches(coverage.season, subscription.season) {
         desired_episode = contiguous_coverage_end(&coverage.episodes, start_episode);
+        if coverage.full_season && coverage.episodes.is_empty() {
+            if let Some(last) = last_aired_season_episode(conn, subscription.id, subscription.season)? {
+                desired_episode = desired_episode.max(last);
+            }
+        }
     }
 
     let mut episode = start_episode;
@@ -5002,6 +5122,7 @@ mod tests {
                     season: Some(1),
                     episodes: vec![3, 4, 5],
                     absolute_episodes: Vec::new(),
+                    full_season: false,
                 },
             )
             .await
@@ -5114,6 +5235,7 @@ mod tests {
                     season: Some(1),
                     episodes: vec![3, 4, 5],
                     absolute_episodes: Vec::new(),
+                    full_season: false,
                 },
             )
             .await
@@ -5136,6 +5258,161 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn full_season_pack_covers_every_aired_episode_of_the_season() {
+        let (_dir, db, site_id, downloader_id) = database_with_media_references().await;
+        let subscription = create_tv_subscription(&db, site_id, downloader_id).await;
+        let mut request = new_download(&subscription, site_id, downloader_id);
+        request.title = "Example.Show.S01.Complete.2160p.NF.WEB-DL".to_string();
+        let queued = enqueue_linked_download(&db, &request).await;
+        let now = Utc::now().to_rfc3339();
+        let conn = open_connection(&db.path).unwrap();
+        conn.execute(
+            "UPDATE subscription_targets SET air_date = '2026-01-01' WHERE subscription_id = ?",
+            params![subscription.id],
+        )
+        .unwrap();
+        for episode in 4..=6 {
+            let key = target_key("tv", subscription.tmdb_id, Some(1), Some(episode), None);
+            conn.execute(
+                "INSERT INTO subscription_targets
+                 (subscription_id, target_key, season, episode, air_date, status, created_at, updated_at)
+                 VALUES (?, ?, 1, ?, '2026-01-01', 'pending', ?, ?)",
+                params![subscription.id, key, episode, now, now],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        assert_eq!(
+            db.season_fully_aired_last_episode(subscription.id, Some(1))
+                .await
+                .unwrap(),
+            Some(6)
+        );
+
+        let fetching = db
+            .claim_due_media_downloads("season-pack-worker", 60, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let infohash = "223456789abcdef0123456789abcdef012345678";
+        assert!(
+            db.mark_media_download_submitting(
+                queued.id,
+                fetching.version,
+                "season-pack-worker",
+                infohash,
+                60,
+            )
+            .await
+            .unwrap()
+        );
+        let submitting = db.get_media_download(queued.id).await.unwrap().unwrap();
+        assert!(
+            db.mark_media_download_submitted(
+                queued.id,
+                submitting.version,
+                "season-pack-worker",
+                infohash,
+                MediaDownloadCoverage {
+                    season: Some(1),
+                    full_season: true,
+                    ..MediaDownloadCoverage::default()
+                },
+            )
+            .await
+            .unwrap()
+        );
+        for episode in 4..=6 {
+            let key = target_key("tv", subscription.tmdb_id, Some(1), Some(episode), None);
+            assert_eq!(
+                db.get_subscription_target(subscription.id, &key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                "submitted",
+                "episode {episode}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn season_with_future_episodes_is_not_fully_aired() {
+        let (_dir, db, site_id, downloader_id) = database_with_media_references().await;
+        let subscription = create_tv_subscription(&db, site_id, downloader_id).await;
+        let now = Utc::now().to_rfc3339();
+        let conn = open_connection(&db.path).unwrap();
+        conn.execute(
+            "UPDATE subscription_targets SET air_date = '2026-01-01' WHERE subscription_id = ?",
+            params![subscription.id],
+        )
+        .unwrap();
+        let key = target_key("tv", subscription.tmdb_id, Some(1), Some(4), None);
+        conn.execute(
+            "INSERT INTO subscription_targets
+             (subscription_id, target_key, season, episode, air_date, status, created_at, updated_at)
+             VALUES (?, ?, 1, 4, '2099-01-01', 'pending', ?, ?)",
+            params![subscription.id, key, now, now],
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(
+            db.season_fully_aired_last_episode(subscription.id, Some(1))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn permanently_failed_release_is_remembered_for_the_target() {
+        let (_dir, db, site_id, downloader_id) = database_with_media_references().await;
+        let subscription = create_tv_subscription(&db, site_id, downloader_id).await;
+        let request = new_download(&subscription, site_id, downloader_id);
+        let queued = enqueue_linked_download(&db, &request).await;
+        let conn = open_connection(&db.path).unwrap();
+        conn.execute(
+            "UPDATE media_downloads SET attempts = ? WHERE id = ?",
+            params![MEDIA_DOWNLOAD_MAX_ATTEMPTS - 1, queued.id],
+        )
+        .unwrap();
+        drop(conn);
+        let since = (Utc::now() - Duration::hours(1)).to_rfc3339();
+        db.claim_due_media_downloads("failing-worker", 60, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            db.list_recent_failed_releases(subscription.id, &request.target_key, &since)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            db.release_media_download_after_error(
+                queued.id,
+                "failing-worker",
+                "HTTP error: tracker returned HTTP 404 Not Found",
+                false,
+            )
+            .await
+            .unwrap()
+        );
+        let failed = db
+            .list_recent_failed_releases(subscription.id, &request.target_key, &since)
+            .await
+            .unwrap();
+        assert_eq!(
+            failed
+                .get(&(site_id, "torrent-3".to_string()))
+                .map(String::as_str),
+            Some("HTTP error: tracker returned HTTP 404 Not Found")
         );
     }
 

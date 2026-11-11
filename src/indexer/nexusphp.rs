@@ -315,6 +315,50 @@ impl NexusPhpIndexer {
         Ok(fallback)
     }
 
+    /// 从详情页读取站点生成的下载链接（可能带 t/sign 等一次性签名）。
+    /// 签名链接只在本次下载中使用，不会写入搜索结果或数据库。
+    async fn fetch_detail_download_url(
+        &self,
+        torrent_id: &str,
+    ) -> Result<Option<Url>, IndexerError> {
+        let mut url = endpoint_url(&self.base_url, "/details.php")?;
+        url.query_pairs_mut()
+            .append_pair("id", torrent_id)
+            .append_pair("hit", "1");
+        let request = self.client.get(url).headers(self.headers());
+        let response = self
+            .access_gate
+            .send_with_same_origin_redirects(&self.client, request, &self.base_url)
+            .await?;
+        let status = response.status();
+        let final_url = response.url().clone();
+        if !same_origin(&self.base_url, &final_url) {
+            return Err(IndexerError::UnsafeUrl(
+                "NexusPHP detail page redirected to another origin".to_string(),
+            ));
+        }
+        let body = response.text().await.map_err(http_error)?;
+        if let Some(error) = rate_limit_error_from_body(&body) {
+            return Err(error);
+        }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            return Err(IndexerError::AuthenticationExpired(format!(
+                "NexusPHP detail page returned HTTP {status}"
+            )));
+        }
+        if !status.is_success() {
+            return Err(IndexerError::Http(format!(
+                "NexusPHP detail page returned HTTP {status}"
+            )));
+        }
+        if response_is_authentication_page(&final_url, &body) {
+            return Err(IndexerError::AuthenticationExpired(
+                "NexusPHP cookie is invalid or expired".to_string(),
+            ));
+        }
+        Ok(find_download_link(&body, &self.base_url, torrent_id))
+    }
+
     async fn download_url(&self, url: Url) -> Result<Vec<u8>, IndexerError> {
         let url = resolve_same_origin_url(&self.base_url, url.as_str())?;
         let request = self.client.get(url).headers(self.headers());
@@ -355,7 +399,31 @@ impl NexusPhpIndexer {
                 if let Some(passkey) = passkey {
                     url.query_pairs_mut().append_pair("passkey", passkey);
                 }
-                self.download_url(url).await
+                match self.download_url(url.clone()).await {
+                    Ok(body) => Ok(body),
+                    // 部分站点（如 HDSky）的 download.php 必须带详情页给出的 t/sign 签名，
+                    // 只拼 id 会得到 404。此时从详情页取站点自己生成的下载链接再试一次。
+                    Err(error)
+                        if matches!(
+                            &error,
+                            IndexerError::Http(_) | IndexerError::InvalidTorrent(_)
+                        ) =>
+                    {
+                        match self.fetch_detail_download_url(&torrent_id).await {
+                            Ok(Some(signed)) if signed != url => self.download_url(signed).await,
+                            Ok(_) => Err(error),
+                            Err(detail_error) => {
+                                tracing::debug!(
+                                    site = %self.site_name,
+                                    %detail_error,
+                                    "NexusPHP detail page download link lookup failed"
+                                );
+                                Err(error)
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
             }
         }
     }
@@ -629,6 +697,26 @@ fn parse_html_results(
     Ok(results)
 }
 
+/// 在详情页里找指向本种子的 download.php 链接，优先选参数最多的（带签名的那条）。
+fn find_download_link(html: &str, base_url: &Url, torrent_id: &str) -> Option<Url> {
+    let document = Html::parse_document(html);
+    let links = Selector::parse("a[href*='download']").ok()?;
+    document
+        .select(&links)
+        .filter_map(|link| link.value().attr("href"))
+        .filter_map(|href| resolve_same_origin_url(base_url, href).ok())
+        .filter(|url| {
+            url.path()
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("download.php"))
+                && url
+                    .query_pairs()
+                    .any(|(key, value)| key.eq_ignore_ascii_case("id") && value == torrent_id)
+        })
+        .max_by_key(|url| url.query_pairs().count())
+}
+
 fn default_detail_url(base_url: &Url, torrent_id: &str) -> Result<String, IndexerError> {
     let mut url = endpoint_url(base_url, "/details.php")?;
     url.query_pairs_mut().append_pair("id", torrent_id);
@@ -787,7 +875,10 @@ mod tests {
     use crate::indexer::access::{OriginAccessGate, default_indexer_access_policy};
     use crate::site::SiteAuth;
 
-    use super::{NexusPhpIndexer, ensure_nexus_success, parse_api_results, parse_html_results};
+    use super::{
+        NexusPhpIndexer, ensure_nexus_success, find_download_link, parse_api_results,
+        parse_html_results,
+    };
 
     #[test]
     fn search_headers_include_custom_values_and_protect_authentication() {
@@ -936,6 +1027,23 @@ mod tests {
             ensure_nexus_success(&unrelated),
             Err(IndexerError::Api(_))
         ));
+    }
+
+    #[test]
+    fn finds_signed_download_link_on_detail_page() {
+        let html = r#"
+            <a href="download.php?id=640160">plain</a>
+            <a href="download.php?id=640160&amp;t=1762800000&amp;sign=abcdef">signed</a>
+            <a href="download.php?id=999&amp;t=1&amp;sign=x">other torrent</a>
+            <a href="https://evil.example/download.php?id=640160&amp;t=1&amp;sign=x&amp;k=1">evil</a>
+        "#;
+        let base = Url::parse("https://hdsky.example").unwrap();
+        let url = find_download_link(html, &base, "640160").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://hdsky.example/download.php?id=640160&t=1762800000&sign=abcdef"
+        );
+        assert!(find_download_link("<a href='download.php?id=1'>x</a>", &base, "2").is_none());
     }
 
     #[test]

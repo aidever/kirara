@@ -20,6 +20,8 @@ pub enum RejectCode {
     UnknownQuality,
     MinimumSeeders,
     BelowMinimumScore,
+    /// 这条资源最近下载失败过（例如种子链接失效），本轮先换别的候选。
+    RecentlyFailed,
 }
 
 impl RejectCode {
@@ -37,11 +39,12 @@ impl RejectCode {
             Self::UnknownQuality => "unknown_quality",
             Self::MinimumSeeders => "minimum_seeders",
             Self::BelowMinimumScore => "below_minimum_score",
+            Self::RecentlyFailed => "recently_failed",
         }
     }
 
     pub const fn is_permanent(self) -> bool {
-        !matches!(self, Self::MinimumSeeders)
+        !matches!(self, Self::MinimumSeeders | Self::RecentlyFailed)
     }
 }
 
@@ -85,6 +88,25 @@ pub struct MatchDecision {
     pub quality_rank: u64,
     pub rejections: Vec<MatchRejection>,
     pub explanations: Vec<String>,
+}
+
+impl MatchDecision {
+    /// 把一条原本可用的候选标记为「最近下载失败」，让选择逻辑改用其他资源。
+    pub fn reject_recently_failed(&mut self, message: impl Into<String>) {
+        if self
+            .rejections
+            .iter()
+            .any(|rejection| rejection.code == RejectCode::RecentlyFailed)
+        {
+            return;
+        }
+        let rejection = MatchRejection::new(RejectCode::RecentlyFailed, message);
+        self.explanations.push(rejection.message.clone());
+        self.rejections.push(rejection);
+        self.rejections.sort_by_key(|rejection| rejection.code);
+        self.accepted = false;
+        self.score = 0;
+    }
 }
 
 pub struct IdentityGate;
@@ -468,9 +490,17 @@ fn check_season(rejections: &mut Vec<MatchRejection>, expected: u32, actual: Opt
 }
 
 fn title_matches(target: &MediaTarget, release: &ReleaseInfo) -> bool {
-    let release_titles = std::iter::once(&release.title).chain(release.alternate_titles.iter());
+    let release_titles = std::iter::once(&release.title)
+        .chain(release.alternate_titles.iter())
+        .flat_map(|title| {
+            // "Dead-End Job AKA Ggoolalba"：AKA 两侧各是一个可匹配的名字。
+            let mut parts = vec![title.clone()];
+            parts.extend(split_aka(title));
+            parts
+        })
+        .collect::<Vec<_>>();
     let mut normalized_release = HashSet::new();
-    for title in release_titles {
+    for title in &release_titles {
         let normalized = normalize_title(title);
         if !normalized.is_empty() {
             normalized_release.insert(normalized);
@@ -487,6 +517,33 @@ fn title_matches(target: &MediaTarget, release: &ReleaseInfo) -> bool {
         let title = normalize_title(title);
         !title.is_empty() && normalized_release.contains(&title)
     })
+}
+
+/// 按独立的 "AKA" 单词拆分标题；没有 AKA 时返回空。
+fn split_aka(title: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut found = false;
+    let tokens: Vec<&str> = title
+        .split(|character: char| character.is_whitespace() || character == '.' || character == '_')
+        .filter(|token| !token.is_empty())
+        .collect();
+    for token in tokens {
+        if token.eq_ignore_ascii_case("aka") {
+            found = true;
+            if !current.trim().is_empty() {
+                parts.push(current.trim().to_string());
+            }
+            current.clear();
+            continue;
+        }
+        current.push_str(token);
+        current.push(' ');
+    }
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+    if found { parts } else { Vec::new() }
 }
 
 fn normalize_title(title: &str) -> String {
@@ -665,6 +722,24 @@ mod tests {
         };
         let allowed = DecisionEngine::evaluate(&allowed_target, &release, &profile(), 10);
         assert!(allowed.accepted);
+    }
+
+    #[test]
+    fn aka_titles_match_either_name() {
+        let release = parse("Dead-End Job AKA Ggoolalba S01E02 2026 1080p NF WEB-DL H.264-RAWR");
+        let target = MediaTarget::Episode {
+            numbering: Vec::new(),
+            tmdb_id: 1,
+            titles: vec!["末路兼职".into(), "Dead End Job".into()],
+            year: Some(2026),
+            season: 1,
+            episode: 2,
+            allow_season_pack: false,
+        };
+        let decision = DecisionEngine::evaluate(&target, &release, &profile(), 10);
+        assert!(!codes(&decision).contains(&RejectCode::WrongTitle), "{decision:?}");
+        assert_eq!(split_aka("Show.AKA.Other.Name"), vec!["Show", "Other Name"]);
+        assert!(split_aka("Akame ga Kill").is_empty());
     }
 
     #[test]

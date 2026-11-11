@@ -5031,6 +5031,7 @@ function rejectionText(rejection: MatchRejection): string {
     unknown_quality: "无法识别资源质量且规则不允许未知质量",
     minimum_seeders: "做种人数低于质量规则要求",
     below_minimum_score: "综合匹配分低于质量规则门槛",
+    recently_failed: "这条资源最近下载失败，暂时改用其他资源",
   };
   return labels[rejection.code] ?? rejection.message;
 }

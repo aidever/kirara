@@ -3197,7 +3197,17 @@ impl Database {
                     UNIQUE(subscription_id, target_key)
                 );
                 CREATE INDEX IF NOT EXISTS idx_media_group_upgrades_status
-                    ON media_group_upgrades(status, last_checked_at);",
+                    ON media_group_upgrades(status, last_checked_at);
+                CREATE TABLE IF NOT EXISTS media_failed_releases (
+                    subscription_id INTEGER NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+                    target_key TEXT NOT NULL,
+                    site_id INTEGER NOT NULL,
+                    torrent_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    last_error TEXT,
+                    failed_at TEXT NOT NULL,
+                    PRIMARY KEY(subscription_id, target_key, site_id, torrent_id)
+                );",
             )
             .map_err(sql_error)?;
             let had_tmdb_genres = column_exists(&conn, "subscriptions", "tmdb_genres_json");

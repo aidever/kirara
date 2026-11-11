@@ -1642,7 +1642,9 @@ impl MediaService {
             }
         };
         let mut target = match prepared {
-            PreparedSubscriptionTarget::Due(target) => target,
+            PreparedSubscriptionTarget::Due(target) => {
+                self.subscription_scan_target(&subscription, target).await?
+            }
             PreparedSubscriptionTarget::Deferred {
                 target_key,
                 next_run_at,
@@ -1732,6 +1734,13 @@ impl MediaService {
             .await?;
         let unwanted = self.subscription_unwanted_episodes(&subscription).await?;
         apply_redundant_episode_ranking(&mut search.candidates, &unwanted);
+        let failed_since =
+            (Utc::now() - Duration::hours(FAILED_RELEASE_COOLDOWN_HOURS)).to_rfc3339();
+        let failed = self
+            .db
+            .list_recent_failed_releases(subscription.id, &target.target_key(), &failed_since)
+            .await?;
+        apply_failed_release_exclusion(&mut search.candidates, &failed);
         let accepted_count = search
             .candidates
             .iter()
@@ -1917,6 +1926,45 @@ impl MediaService {
                 .ok()
                 .flatten()
                 .unwrap_or(1),
+            season_last_episode: self
+                .db
+                .season_fully_aired_last_episode(subscription.id, subscription.season)
+                .await?,
+        })
+    }
+
+    /// 订阅当前目标。单集目标在本季已全部播出时默认接受整季包：
+    /// 一次放出全季的剧（如 Netflix），站点上往往只有整季包。
+    async fn subscription_scan_target(
+        &self,
+        subscription: &SubscriptionRecord,
+        target: MediaTarget,
+    ) -> Result<MediaTarget, MediaServiceError> {
+        let MediaTarget::Episode {
+            tmdb_id,
+            titles,
+            year,
+            season,
+            episode,
+            numbering,
+            ..
+        } = target
+        else {
+            return Ok(target);
+        };
+        let allow_season_pack = self
+            .db
+            .season_fully_aired_last_episode(subscription.id, subscription.season)
+            .await?
+            .is_some();
+        Ok(MediaTarget::Episode {
+            tmdb_id,
+            titles,
+            year,
+            season,
+            episode,
+            allow_season_pack,
+            numbering,
         })
     }
 
@@ -1929,7 +1977,10 @@ impl MediaService {
         coverage: &MediaDownloadCoverage,
         infohash: &str,
     ) {
-        if coverage.episodes.len() <= 1 && coverage.absolute_episodes.len() <= 1 {
+        if coverage.episodes.len() <= 1
+            && coverage.absolute_episodes.len() <= 1
+            && !coverage.full_season
+        {
             return;
         }
         let Some(subscription_id) = download.subscription_id else {
@@ -2045,7 +2096,9 @@ impl MediaService {
         }
 
         subscription.aliases = aliases;
-        let refreshed_target = subscription_target(subscription)?;
+        let refreshed_target = self
+            .subscription_scan_target(subscription, subscription_target(subscription)?)
+            .await?;
         reevaluate_resource_candidates(&refreshed_target, &mut search.candidates, profile);
         *target = refreshed_target;
 
@@ -2285,7 +2338,9 @@ impl MediaService {
                     "download site is not configured for the subscription".to_string(),
                 ));
             }
-            let target = subscription_target(&subscription)?;
+            let target = self
+                .subscription_scan_target(&subscription, subscription_target(&subscription)?)
+                .await?;
             if cached
                 .target
                 .as_ref()
@@ -3737,6 +3792,7 @@ fn media_download_coverage(
     };
     MediaDownloadCoverage {
         season: release.season,
+        full_season: release.full_season && episodes.is_empty() && absolute_episodes.is_empty(),
         episodes,
         absolute_episodes,
     }
@@ -4020,6 +4076,60 @@ fn group_selection_note(
             .then(|| format!("{filtered} 个可用资源被包含/排除规则过滤"));
     }
     let primary = policy.groups[0].label();
+    // 列表内的组如果只发了整季包（本季未播完时不接受），要说清楚，别让人以为组没发布。
+    let better_rank = match (picked, rank) {
+        (Some(_), Some(rank)) => rank,
+        _ => usize::MAX,
+    };
+    let pack_only_groups: Vec<String> = {
+        let mut groups: Vec<(usize, String)> = candidates
+            .iter()
+            .filter_map(|candidate| {
+                let decision = candidate.decision.as_ref()?;
+                if decision.accepted
+                    || !decision
+                        .rejections
+                        .iter()
+                        .all(|rejection| rejection.code == RejectCode::SeasonPackNotAllowed)
+                {
+                    return None;
+                }
+                let release = candidate.release.as_ref()?;
+                let rank = policy.rank_of(
+                    release.release_group.as_deref(),
+                    &ReleaseTraits::of(release),
+                )?;
+                (rank < better_rank).then(|| (rank, candidate_group_label(candidate)))
+            })
+            .collect();
+        groups.sort();
+        groups.dedup_by(|a, b| a.1 == b.1);
+        groups.into_iter().map(|(_, label)| label).collect()
+    };
+    let pack_suffix = if pack_only_groups.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "（{} 只发布了整季包，本季尚未播完，暂不接受整季包）",
+            pack_only_groups.join("、")
+        )
+    };
+    let note = group_selection_note_inner(policy, candidates, picked, rank, waiting, &primary, accepted, filtered);
+    note.map(|note| format!("{note}{pack_suffix}"))
+        .or_else(|| (!pack_suffix.is_empty()).then(|| pack_suffix.trim_matches(['（', '）']).to_string()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn group_selection_note_inner(
+    _policy: &GroupPolicy,
+    candidates: &[ResourceCandidate],
+    picked: Option<usize>,
+    rank: Option<usize>,
+    waiting: Option<usize>,
+    primary: &str,
+    accepted: usize,
+    filtered: usize,
+) -> Option<String> {
     if let Some(index) = waiting {
         return Some(format!(
             "首选组 {primary} 尚未发布，等待结束后使用 {}",
@@ -4122,6 +4232,8 @@ struct UnwantedEpisodes {
     absolute_episodes: HashSet<u32>,
     episodes_before: u32,
     absolute_before: u32,
+    /// 本季已播出的最后一集；用于估算整季包里有多少集是多余的。
+    season_last_episode: Option<u32>,
 }
 
 impl UnwantedEpisodes {
@@ -4150,6 +4262,15 @@ impl UnwantedEpisodes {
                 .filter(|episode| self.is_unwanted_absolute(**episode))
                 .count() as u32;
         }
+        if release.full_season
+            && release.episodes.is_empty()
+            && self.season_matches(release)
+            && let Some(last) = self.season_last_episode
+        {
+            return (1..=last)
+                .filter(|episode| self.is_unwanted_episode(*episode))
+                .count() as u32;
+        }
         if release.episodes.is_empty() || !self.season_matches(release) {
             return 0;
         }
@@ -4174,6 +4295,41 @@ impl UnwantedEpisodes {
                 .episodes
                 .iter()
                 .all(|episode| self.is_unwanted_episode(*episode))
+    }
+}
+
+/// 一条资源彻底下载失败后，在这段时间内不再自动选它。
+const FAILED_RELEASE_COOLDOWN_HOURS: i64 = 72;
+
+fn apply_failed_release_exclusion(
+    candidates: &mut [ResourceCandidate],
+    failed: &HashMap<(i64, String), String>,
+) {
+    if failed.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    for candidate in candidates.iter_mut() {
+        let key = (candidate.result.site_id, candidate.result.torrent_id.clone());
+        let Some(error) = failed.get(&key) else {
+            continue;
+        };
+        let Some(decision) = candidate.decision.as_mut() else {
+            continue;
+        };
+        if !decision.accepted {
+            continue;
+        }
+        let error = error.chars().take(200).collect::<String>();
+        decision.reject_recently_failed(format!("this release failed to download recently: {error}"));
+        if let Some(sort_key) = candidate.sort_key.as_mut() {
+            sort_key.accepted = false;
+            sort_key.score = 0;
+        }
+        changed = true;
+    }
+    if changed {
+        candidates.sort_by(compare_candidates);
     }
 }
 
@@ -4304,6 +4460,7 @@ mod tests {
                 season: Some(1),
                 episodes: vec![3, 4, 5],
                 absolute_episodes: Vec::new(),
+                full_season: false,
             }
         );
 
@@ -4350,8 +4507,11 @@ mod tests {
             absolute_episodes: HashSet::new(),
             episodes_before: 1,
             absolute_before: 1,
+            season_last_episode: Some(8),
         };
         let pack = parser.parse("Show S01E01-E10 2160p WEB-DL").unwrap();
+        let season_pack = parser.parse("Show S01 Complete 2160p NF WEB-DL").unwrap();
+        assert_eq!(unwanted.redundant_count(&season_pack), 4);
         let unseasoned = parser.parse("Show 第1-10集 2160p WEB-DL").unwrap();
         let single = parser.parse("Show S01E05 720p WEB-DL").unwrap();
         assert_eq!(unwanted.redundant_count(&pack), 4);
@@ -4406,6 +4566,7 @@ mod tests {
                 season: Some(1),
                 episodes: Vec::new(),
                 absolute_episodes: Vec::new(),
+                full_season: false,
             }
         );
     }
