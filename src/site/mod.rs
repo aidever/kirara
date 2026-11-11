@@ -1,5 +1,7 @@
+pub mod api_sites;
 pub mod factory;
 pub mod gazelle;
+pub(crate) mod json_util;
 pub mod mteam;
 pub mod nexusphp;
 mod nexusphp_levels;
@@ -196,6 +198,14 @@ pub enum SiteType {
     MTeam,
     Gazelle,
     Unit3D,
+    /// Rousi Pro（PeerGo API v1），API Key 认证。
+    Rousi,
+    /// TNode（朱雀等），Cookie 认证 + CSRF Token。
+    TNode,
+    /// SunnyPT 集成 API，API Key 认证。
+    SunnyPt,
+    /// Piggo（猪猪）新版站点：走站点「实验室 API」（`api.<域名>/v1/api`），令牌认证。
+    Piggo,
 }
 
 impl SiteType {
@@ -205,6 +215,10 @@ impl SiteType {
             "mteam" | "m_team" => Some(SiteType::MTeam),
             "gazelle" => Some(SiteType::Gazelle),
             "unit3d" | "unit_3d" | "UNIT3D" => Some(SiteType::Unit3D),
+            "rousi" => Some(SiteType::Rousi),
+            "tnode" => Some(SiteType::TNode),
+            "sunnypt" => Some(SiteType::SunnyPt),
+            "piggo" => Some(SiteType::Piggo),
             _ => None,
         }
     }

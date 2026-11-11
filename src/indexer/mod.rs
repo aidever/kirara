@@ -1,4 +1,5 @@
 pub(crate) mod access;
+pub mod api_sites;
 pub mod mteam;
 pub mod nexusphp;
 pub mod pool;
@@ -279,6 +280,18 @@ pub(crate) fn create_indexer(
             client,
             Arc::clone(&access_gate),
         )?)),
+        SiteType::Rousi | SiteType::TNode | SiteType::SunnyPt | SiteType::Piggo => {
+            Ok(Arc::new(api_sites::ApiSiteIndexer::new(
+                site_type,
+                record.id,
+                record.name.clone(),
+                &record.base_url,
+                auth,
+                request_headers,
+                client,
+                Arc::clone(&access_gate),
+            )?))
+        }
         SiteType::MTeam => Ok(Arc::new(mteam::MTeamIndexer::new(
             record.id,
             record.name.clone(),

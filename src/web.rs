@@ -3128,14 +3128,21 @@ fn validate_site_auth_type(site_type: SiteType, auth: &SiteAuth) -> Result<(), A
     if site_type == SiteType::MTeam && !matches!(auth, SiteAuth::ApiKey { .. }) {
         return Err(ApiError::bad_request("M-Team 站点必须使用 API Key 认证"));
     }
-    if matches!(site_type, SiteType::Gazelle | SiteType::Unit3D)
+    if matches!(site_type, SiteType::Rousi | SiteType::SunnyPt | SiteType::Piggo)
+        && !matches!(auth, SiteAuth::ApiKey { .. })
+    {
+        return Err(ApiError::bad_request(
+            "Rousi Pro / SunnyPT / Piggo 站点必须使用 API Key（登录令牌）认证",
+        ));
+    }
+    if matches!(site_type, SiteType::Gazelle | SiteType::Unit3D | SiteType::TNode)
         && !matches!(
             auth,
             SiteAuth::Cookie { .. } | SiteAuth::CookiePasskey { .. }
         )
     {
         return Err(ApiError::bad_request(
-            "Gazelle / Unit3D 账户统计需要 Cookie 认证",
+            "Gazelle / Unit3D / TNode 站点需要 Cookie 认证",
         ));
     }
     Ok(())

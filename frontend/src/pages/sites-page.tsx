@@ -180,9 +180,27 @@ async function writeClipboardText(value: string): Promise<void> {
   }
 }
 
+type SiteType = "nexusphp" | "mteam" | "gazelle" | "unit3d" | "rousi" | "tnode" | "sunnypt" | "piggo";
+
+/** 这些站点只能用 API Key 认证（M-Team、Rousi Pro、SunnyPT 的开放接口）。 */
+function siteTypeUsesApiKey(siteType: string): boolean {
+  return siteType === "mteam" || siteType === "rousi" || siteType === "sunnypt" || siteType === "piggo";
+}
+
+const SITE_TYPE_LABELS: Record<string, string> = {
+  nexusphp: "NexusPHP",
+  mteam: "M-Team",
+  gazelle: "Gazelle",
+  unit3d: "Unit3D",
+  rousi: "Rousi Pro",
+  tnode: "TNode",
+  sunnypt: "SunnyPT",
+  piggo: "Piggo",
+};
+
 interface SiteForm {
   name: string;
-  site_type: "nexusphp" | "mteam" | "gazelle";
+  site_type: SiteType;
   base_url: string;
   use_proxy: boolean;
   auth_type: AuthType;
@@ -407,7 +425,7 @@ const emptySiteForm: SiteForm = {
 };
 
 function buildAuthConfig(form: SiteForm): object {
-  if (form.site_type === "mteam") {
+  if (siteTypeUsesApiKey(form.site_type)) {
     return { auth_type: "api_key", api_key: form.api_key };
   }
   switch (form.auth_type) {
@@ -735,7 +753,7 @@ export function SitesPage() {
       ...sitePresets.map((preset) => ({
         value: preset.ptd_id,
         label: preset.name,
-        description: `${preset.site_type === "gazelle" ? "Gazelle · " : ""}${preset.aliases.join("、") || preset.ptd_id} · ${preset.base_url.replace(/^https?:\/\//, "")}`,
+        description: `${preset.site_type === "nexusphp" ? "" : `${SITE_TYPE_LABELS[preset.site_type] ?? preset.site_type} · `}${preset.aliases.join("、") || preset.ptd_id} · ${preset.base_url.replace(/^https?:\/\//, "")}`,
         keywords: [preset.ptd_id, preset.base_url, preset.site_type, ...preset.aliases],
       })),
     ],
@@ -995,7 +1013,7 @@ export function SitesPage() {
       name: preset.name,
       site_type: preset.site_type,
       base_url: preset.base_url,
-      auth_type: preset.site_type === "mteam" ? "api_key" : "cookie",
+      auth_type: siteTypeUsesApiKey(preset.site_type) ? "api_key" : "cookie",
       cookie: "",
       passkey: "",
       api_key: "",
@@ -1066,7 +1084,7 @@ export function SitesPage() {
     setEditingId(site.id);
     setSelectedSitePreset(CUSTOM_SITE_PRESET);
     const siteType = (site.site_type as SiteForm["site_type"]) || "nexusphp";
-    const authType = site.auth_type ?? (siteType === "mteam" ? "api_key" : "cookie");
+    const authType = site.auth_type ?? (siteTypeUsesApiKey(siteType) ? "api_key" : "cookie");
     setForm({
       ...emptySiteForm,
       name: site.name,
@@ -1410,10 +1428,10 @@ export function SitesPage() {
     : "输入新的认证凭据";
 
   function renderAuthFields() {
-    const fields = credentialFieldsFor(form.site_type === "mteam" ? "api_key" : form.auth_type);
+    const fields = credentialFieldsFor(siteTypeUsesApiKey(form.site_type) ? "api_key" : form.auth_type);
     return (
       <div className="space-y-4">
-        {form.site_type !== "mteam" ? (
+        {!siteTypeUsesApiKey(form.site_type) ? (
           <div className="space-y-2">
             <Label htmlFor="site-auth-type">认证方式</Label>
             <Select
@@ -1589,9 +1607,7 @@ export function SitesPage() {
               className="w-full"
               options={[
                 { value: "all", label: "全部类型" },
-                { value: "nexusphp", label: "NexusPHP" },
-                { value: "mteam", label: "M-Team" },
-                { value: "gazelle", label: "Gazelle" },
+                ...Object.entries(SITE_TYPE_LABELS).map(([value, label]) => ({ value, label })),
               ]}
             />
             </div>
@@ -2033,18 +2049,19 @@ export function SitesPage() {
                   setClearAuthConfig(false);
                   patch({
                     site_type: v,
-                    auth_type: v === "mteam" ? "api_key" : "cookie",
+                    auth_type: siteTypeUsesApiKey(v) ? "api_key" : "cookie",
                   });
                 }}
-                options={[
-                  { value: "nexusphp", label: "NexusPHP" },
-                  { value: "mteam", label: "M-Team" },
-                  { value: "gazelle", label: "Gazelle" },
-                ]}
+                options={Object.entries(SITE_TYPE_LABELS).map(([value, label]) => ({ value, label }))}
               />
             </div>
 
             {form.site_type === "gazelle" ? <p className="text-xs leading-5 text-muted">支持 GPW 等 Gazelle JSON API 站点的账户数据同步；使用 Cookie 登录，暂不支持种子搜索。</p> : null}
+            {form.site_type === "unit3d" ? <p className="text-xs leading-5 text-muted">Unit3D 站点使用 Cookie 登录，支持账户数据、种子搜索和下载。</p> : null}
+            {form.site_type === "rousi" ? <p className="text-xs leading-5 text-muted">Rousi Pro（PeerGo）使用个人 API Key（pgk_ 开头），需要授予 profile:read、torrent:read、torrent:download 权限。</p> : null}
+            {form.site_type === "sunnypt" ? <p className="text-xs leading-5 text-muted">SunnyPT 使用站点「集成 API」的 API Key，请求发往 api.sunnypt.top。</p> : null}
+            {form.site_type === "piggo" ? <p className="text-xs leading-5 text-muted">Piggo 使用站点「实验室」里创建的令牌（个人设置 → 实验室令牌），请求发往 api.piggo.me。</p> : null}
+            {form.site_type === "tnode" ? <p className="text-xs leading-5 text-muted">TNode 站点（如朱雀）使用 Cookie 登录，搜索所需的 CSRF Token 会自动获取。</p> : null}
 
             <div className="space-y-2">
               <Label htmlFor="site-base-url">基础 URL</Label>
@@ -2323,7 +2340,7 @@ function SiteAccountIdentity({ site }: { site: SiteRecord }) {
     <div className="min-w-0">
       {href ? <a href={href} target="_blank" rel="noopener noreferrer" aria-label={`打开${site.name}（新窗口）`} className="group block min-h-11 rounded-sm underline-offset-4 hover:text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">{identity}</a> : <div>{identity}<p className="mt-1 text-xs text-destructive">站点地址无效</p></div>}
       <p className="mt-1 break-words text-sm">{site.stats?.username ?? "账户待获取"}</p>
-      <p className="mt-1 break-words text-xs text-muted">UID {site.stats?.uid ?? "—"} · {site.site_type === "gazelle" ? "Gazelle" : site.site_type}</p>
+      <p className="mt-1 break-words text-xs text-muted">UID {site.stats?.uid ?? "—"} · {SITE_TYPE_LABELS[site.site_type] ?? site.site_type}</p>
       <p className="mt-1 break-words text-xs text-muted">
         入站时间：{joinTime ? <time dateTime={joinTime} className="tabular-nums">{formatDateTime(joinTime)}</time> : "未获取"}
       </p>

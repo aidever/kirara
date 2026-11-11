@@ -41,5 +41,14 @@ pub fn create_adapter_with_cached_user_id(
             request_headers,
             client,
         )),
+        SiteType::Rousi | SiteType::TNode | SiteType::SunnyPt | SiteType::Piggo => {
+            Box::new(super::api_sites::ApiSiteAdapter::new(
+                site_type,
+                record.base_url.clone(),
+                auth,
+                request_headers,
+                client,
+            ))
+        }
     })
 }

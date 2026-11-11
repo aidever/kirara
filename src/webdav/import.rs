@@ -219,11 +219,19 @@ pub fn normalize(data: &ImportData) -> (Vec<Candidate>, Vec<String>) {
         };
         let Some(preset) = crate::ptd_site_catalog::SITE_PRESETS
             .iter()
-            .find(|p| p.ptd_id == id && p.site_type != "mteam")
+            .find(|p| p.ptd_id == id)
         else {
-            skipped.push(format!("{domain}：暂无 Cookie 适配预设"));
+            skipped.push(format!("{domain}：云母暂不支持该站点（PTD 站点 {id}）"));
             continue;
         };
+        if matches!(preset.site_type, "mteam" | "rousi" | "sunnypt" | "piggo") {
+            // 这些站点只接受 API Key，Cookie 导入无法建立可用的站点。
+            skipped.push(format!(
+                "{domain}：{} 使用 API Key 认证，请在站点管理中手动添加",
+                preset.name
+            ));
+            continue;
+        }
         let Some(cookie) = cookie_header(cookies, &url) else {
             skipped.push(format!("{domain}：没有可用的 Cookie"));
             continue;

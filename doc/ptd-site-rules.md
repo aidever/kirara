@@ -11,7 +11,7 @@
 | | PT-depiler | kirara |
 | --- | --- | --- |
 | 形态 | 浏览器扩展 | Rust 服务端（桌面 / Docker） |
-| 站点模型 | Schema + 340 个 `definitions/*.ts` | 通用引擎适配器 + 全站规则快照 |
+| 站点模型 | Schema + 415 个 `definitions/*.ts` | 通用引擎适配器 + 全站规则快照 |
 | 更新方式 | 随扩展 Release 发版；用户可 `merge` 覆盖 | 改代码 / 规则后编译发版 |
 | 请求上下文 | 真实浏览器 Cookie、CF clearance | Cookie / API Key + reqwest |
 
@@ -28,7 +28,7 @@ PT-depiler definitions/*.ts (pinned commit)
         │
         │  tools/gen_ptd_site_rules.py
         ▼
-tools/ptd_site_rules.json / .rs   （340 个 definition 的可审查快照）
+tools/ptd_site_rules.json / .rs   （415 个 definition 的可审查快照）
         │
         │  生成运行时声明
         ▼
@@ -46,11 +46,29 @@ src/site/ptd_rules_generated.rs
 | `mteam` | 有 | 有 | **必须 API Key** |
 | `gazelle` | 有 | **尚未支持** | Cookie |
 | `unit3d` | 有 | 有（`indexer/unit3d.rs`） | **必须 Cookie** |
+| `rousi` | 有（`site/api_sites.rs`） | 有（`indexer/api_sites.rs`） | **必须 API Key**（PeerGo `pgk_…`） |
+| `tnode` | 有（`site/api_sites.rs`） | 有（`indexer/api_sites.rs`） | **必须 Cookie**，CSRF Token 自动获取 |
+| `sunnypt` | 有（`site/api_sites.rs`） | 有（`indexer/api_sites.rs`） | **必须 API Key**（请求发往 `api.<域名>`） |
+| `piggo` | 有（`site/api_sites.rs`） | 有（`indexer/api_sites.rs`） | **必须 API Key**：站点「实验室令牌」，请求发往 `https://api.<域名>/v1/api` |
+
+`rousi` / `tnode` / `sunnypt` 分别移植自 PTD 的 `rousipro.ts`、`zhuque.ts`、`sunnypt.ts`（JSON API，非 NexusPHP 页面）。`piggo` 是 Piggo 改用 Laravel 重写后的官方「实验室 API」，PTD 尚未适配，单独实现。PTD 导入只带 Cookie，所以 API Key 站点在导入时会提示手动添加。
 
 ### 站点目录
 
 - `src/ptd_site_catalog.rs`：可添加的站点预设（名称、类型、base_url、别名）
 - `src/ptd_sites.rs`：host → PTD site id 映射（规则与备份识别用）
+
+两者用 `tools/sync_ptd_sites.py` 从 PTD 本地源码同步：新增 `urls` / `legacyUrls` 里的域名（站点换域名、多入口后 PTD 导入不再判为「未识别站点」），为有适配器的存活私有站补预设，站点主域名迁到 `legacyUrls` 时预设跟随新域名；PTD 已删除的旧域名保留。
+
+```bash
+git clone --depth 1 https://github.com/pt-plugins/PT-depiler.git /tmp/ptd
+python3 tools/sync_ptd_sites.py --local /tmp/ptd/src/packages/site/definitions \
+  --commit "$(git -C /tmp/ptd rev-parse HEAD)"
+python3 tools/gen_ptd_site_rules.py --all --local /tmp/ptd/src/packages/site/definitions \
+  --commit "$(git -C /tmp/ptd rev-parse HEAD)" \
+  --json-out tools/ptd_site_rules.json --rust-out tools/ptd_site_rules.rs \
+  --runtime-out src/site/ptd_rules_generated.rs
+```
 
 Unit3D 示例预设：`blutopia` / `aither` / `huno` / `fearnopeer` / `shareisland`。
 
@@ -80,7 +98,7 @@ Unit3D 示例预设：`blutopia` / `aither` / `huno` / `fearnopeer` / `shareisla
 | `bonus_per_hour_selectors` | 资料页上直接给出的时魔选择器 |
 | `user_info_processes` | 请求路径、查询参数、方法、响应类型及该步字段选择器 |
 
-当前快照覆盖全部 340 个 definition；运行时生成 68 条含自定义数据的 NexusPHP / Unit3D 规则，其余这两类站点使用 PTD 通用 schema 流程。Gazelle 与 M-Team 使用独立适配器。其他 PTD schema 的 definition 保存在 JSON 快照中，但 kirara 尚未实现对应引擎。
+当前快照覆盖全部 415 个 definition；运行时生成 64 条含自定义数据的 NexusPHP / Unit3D 规则，其余这两类站点使用 PTD 通用 schema 流程。Gazelle 与 M-Team 使用独立适配器。其他 PTD schema 的 definition 保存在 JSON 快照中，但 kirara 尚未实现对应引擎。
 
 ### 已内置的高价值规则（示意）
 

@@ -1,7 +1,7 @@
 //! PT-Depiler site presets supported by the kirara adapters.
 //!
-//! Generated from PT-Depiler site definitions at commit
-//! `e9fae952f8200ed06a0822baae6f6f6ae84b2f5a` (2026-08-31).
+//! Generated from PT-Depiler site definitions; synced by `tools/sync_ptd_sites.py`
+//! at commit `50090c082cab1865874ff1831a9722c9bf3dfabd`.
 
 use serde::Serialize;
 
@@ -362,7 +362,7 @@ pub const SITE_PRESETS: &[PtdSitePreset] = &[
         ptd_id: "hdchina",
         name: "HDChina",
         site_type: "nexusphp",
-        base_url: "https://hdchina.org",
+        base_url: "https://hdwing.org",
         aliases: &["瓷器"],
     },
     PtdSitePreset {
@@ -390,7 +390,7 @@ pub const SITE_PRESETS: &[PtdSitePreset] = &[
         ptd_id: "hddolby",
         name: "HD Dolby",
         site_type: "nexusphp",
-        base_url: "https://www.hddolby.com",
+        base_url: "https://www.uhddolby.com",
         aliases: &["高清杜比"],
     },
     PtdSitePreset {
@@ -767,7 +767,7 @@ pub const SITE_PRESETS: &[PtdSitePreset] = &[
     PtdSitePreset {
         ptd_id: "piggo",
         name: "Piggo",
-        site_type: "nexusphp",
+        site_type: "piggo",
         base_url: "https://piggo.me",
         aliases: &[],
     },
@@ -1055,7 +1055,7 @@ pub const SITE_PRESETS: &[PtdSitePreset] = &[
         ptd_id: "tokyopt",
         name: "Tokyo",
         site_type: "nexusphp",
-        base_url: "https://www.tokyopt.xyz",
+        base_url: "https://www.tokyo-manga.top",
         aliases: &[],
     },
     PtdSitePreset {
@@ -1195,7 +1195,7 @@ pub const SITE_PRESETS: &[PtdSitePreset] = &[
         ptd_id: "zrpt",
         name: "ZRPT",
         site_type: "nexusphp",
-        base_url: "https://zrpt.cc",
+        base_url: "https://naturept.top",
         aliases: &["探索自然美", "专注纪录片"],
     },
     // Unit3D adapters (user stats; search not yet supported).
@@ -1234,6 +1234,391 @@ pub const SITE_PRESETS: &[PtdSitePreset] = &[
         base_url: "https://shareisland.org",
         aliases: &[],
     },
+    PtdSitePreset {
+        ptd_id: "0dayfiles",
+        name: "0DayFiles",
+        site_type: "unit3d",
+        base_url: "https://0dayfiles.net",
+        aliases: &["0DF"],
+    },
+    PtdSitePreset {
+        ptd_id: "asiancinema",
+        name: "AsianCinema",
+        site_type: "unit3d",
+        base_url: "https://eiga.moi",
+        aliases: &["ACM"],
+    },
+    PtdSitePreset {
+        ptd_id: "bitporn",
+        name: "BitPorn",
+        site_type: "unit3d",
+        base_url: "https://bitporn.eu",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "capybarabr",
+        name: "CapybaraBR",
+        site_type: "unit3d",
+        base_url: "https://capybarabr.com",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "ceskeforum",
+        name: "CeskeForum",
+        site_type: "nexusphp",
+        base_url: "https://t.ceskeforum.com",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "cinematik",
+        name: "Cinematik",
+        site_type: "unit3d",
+        base_url: "https://cinematik.net",
+        aliases: &["tik"],
+    },
+    PtdSitePreset {
+        ptd_id: "clearjav",
+        name: "ClearJAV",
+        site_type: "unit3d",
+        base_url: "https://clearjav.com",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "concertos",
+        name: "Concertos",
+        site_type: "unit3d",
+        base_url: "https://concertos.live",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "dabaojian",
+        name: "大宝剑",
+        site_type: "nexusphp",
+        base_url: "https://pt.525968.xyz",
+        aliases: &["大保健"],
+    },
+    PtdSitePreset {
+        ptd_id: "danishbytes",
+        name: "DanishBytes",
+        site_type: "unit3d",
+        base_url: "https://danishbytes.club",
+        aliases: &["DBy"],
+    },
+    PtdSitePreset {
+        ptd_id: "darkland",
+        name: "Darkland",
+        site_type: "unit3d",
+        base_url: "https://darkland.top",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "darkpeers",
+        name: "darkpeers",
+        site_type: "unit3d",
+        base_url: "https://darkpeers.org",
+        aliases: &["DP"],
+    },
+    PtdSitePreset {
+        ptd_id: "datascene",
+        name: "DataScene",
+        site_type: "unit3d",
+        base_url: "https://datascene.xyz",
+        aliases: &["DS"],
+    },
+    PtdSitePreset {
+        ptd_id: "desitorrents",
+        name: "DesiTorrents",
+        site_type: "unit3d",
+        base_url: "https://torrent.desi",
+        aliases: &["Desitorrents"],
+    },
+    PtdSitePreset {
+        ptd_id: "dreadvault",
+        name: "DreadVault",
+        site_type: "unit3d",
+        base_url: "https://dreadvault.org",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "emuwarez",
+        name: "eMuwarez",
+        site_type: "unit3d",
+        base_url: "https://emu-warez.com",
+        aliases: &["eMz"],
+    },
+    PtdSitePreset {
+        ptd_id: "geminitracker",
+        name: "GeminiTracker",
+        site_type: "unit3d",
+        base_url: "https://gemini-tracker.org",
+        aliases: &["G3MINI"],
+    },
+    PtdSitePreset {
+        ptd_id: "generationfree",
+        name: "Generation-Free",
+        site_type: "unit3d",
+        base_url: "https://generation-free.org",
+        aliases: &["GF-FREE", "GF"],
+    },
+    PtdSitePreset {
+        ptd_id: "hdunited",
+        name: "HD-UNiT3D",
+        site_type: "unit3d",
+        base_url: "https://hd-united.vn",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "hellenichd",
+        name: "HELLENIC-HD",
+        site_type: "unit3d",
+        base_url: "https://hellenic-hd.cc",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "homiehelpdesk",
+        name: "HomieHelpdesk",
+        site_type: "unit3d",
+        base_url: "https://homiehelpdesk.net",
+        aliases: &["HHD"],
+    },
+    PtdSitePreset {
+        ptd_id: "hqmusic",
+        name: "HQMusic",
+        site_type: "nexusphp",
+        base_url: "https://tracker.hqmusic.info",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "infinityhd",
+        name: "InfinityHD",
+        site_type: "unit3d",
+        base_url: "https://infinityhd.net",
+        aliases: &["IHD"],
+    },
+    PtdSitePreset {
+        ptd_id: "jptv4us",
+        name: "JPTV4us",
+        site_type: "unit3d",
+        base_url: "https://jptv4.us",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "latteam",
+        name: "LAT-Team",
+        site_type: "unit3d",
+        base_url: "https://lat-team.com",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "lpbits",
+        name: "LP-Bits",
+        site_type: "nexusphp",
+        base_url: "https://lp-bits.com",
+        aliases: &["LP-Bits 2.0"],
+    },
+    PtdSitePreset {
+        ptd_id: "lst",
+        name: "LST",
+        site_type: "unit3d",
+        base_url: "https://lst.gg",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "luminarr",
+        name: "Luminarr",
+        site_type: "unit3d",
+        base_url: "https://luminarr.me",
+        aliases: &["LUME"],
+    },
+    PtdSitePreset {
+        ptd_id: "midnightscene",
+        name: "MidnightScene",
+        site_type: "unit3d",
+        base_url: "https://midnightscene.cc",
+        aliases: &["MS"],
+    },
+    PtdSitePreset {
+        ptd_id: "monikadesign",
+        name: "Monikadesign",
+        site_type: "unit3d",
+        base_url: "https://monikadesign.uk",
+        aliases: &["MDU", "莫妮卡"],
+    },
+    PtdSitePreset {
+        ptd_id: "nordicbytes",
+        name: "NordicBytes",
+        site_type: "unit3d",
+        base_url: "https://nordicbytes.org",
+        aliases: &["NBy", "DanishBytes"],
+    },
+    PtdSitePreset {
+        ptd_id: "nordicquality",
+        name: "NordicQuality",
+        site_type: "unit3d",
+        base_url: "https://nordicq.org",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "oldtoonsworld",
+        name: "OldToonsWorld",
+        site_type: "unit3d",
+        base_url: "https://oldtoons.world",
+        aliases: &["OTW"],
+    },
+    PtdSitePreset {
+        ptd_id: "onlyencodes",
+        name: "OnlyEncodes+",
+        site_type: "unit3d",
+        base_url: "https://onlyencodes.cc",
+        aliases: &["OE"],
+    },
+    PtdSitePreset {
+        ptd_id: "peergarden",
+        name: "PeerGarden",
+        site_type: "unit3d",
+        base_url: "https://peergarden.org",
+        aliases: &["PG"],
+    },
+    PtdSitePreset {
+        ptd_id: "polishtorrent",
+        name: "PolishTorrent",
+        site_type: "unit3d",
+        base_url: "https://polishtorrent.top",
+        aliases: &["PTT"],
+    },
+    PtdSitePreset {
+        ptd_id: "portugas",
+        name: "Portugas",
+        site_type: "unit3d",
+        base_url: "https://portugas.org",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "qingwa",
+        name: "QingWa",
+        site_type: "nexusphp",
+        base_url: "https://www.qingwapt.com",
+        aliases: &["青蛙PT"],
+    },
+    PtdSitePreset {
+        ptd_id: "racing4everyone",
+        name: "Racing4Everyone",
+        site_type: "unit3d",
+        base_url: "https://racing4everyone.eu",
+        aliases: &["R4E"],
+    },
+    PtdSitePreset {
+        ptd_id: "rastastugan",
+        name: "Rastastugan",
+        site_type: "unit3d",
+        base_url: "https://rastastugan.org",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "reelflix",
+        name: "ReelFliX",
+        site_type: "unit3d",
+        base_url: "https://reelflix.cc",
+        aliases: &["RFX"],
+    },
+    PtdSitePreset {
+        ptd_id: "retromoviesclub",
+        name: "RetroMoviesClub",
+        site_type: "unit3d",
+        base_url: "https://retro-movies.club",
+        aliases: &["RMC"],
+    },
+    PtdSitePreset {
+        ptd_id: "rockethd",
+        name: "RocketHD",
+        site_type: "unit3d",
+        base_url: "https://rocket-hd.cc",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "rousipro",
+        name: "Rousi Pro",
+        site_type: "rousi",
+        base_url: "https://rousi.pro",
+        aliases: &["Rousi", "肉丝"],
+    },
+    PtdSitePreset {
+        ptd_id: "seedpool",
+        name: "seedpool",
+        site_type: "unit3d",
+        base_url: "https://seedpool.org",
+        aliases: &["SP"],
+    },
+    PtdSitePreset {
+        ptd_id: "skipthecommercials",
+        name: "SkipTheCommercials",
+        site_type: "unit3d",
+        base_url: "https://skipthecommercials.xyz",
+        aliases: &["STC"],
+    },
+    PtdSitePreset {
+        ptd_id: "sunnypt",
+        name: "Sunny",
+        site_type: "sunnypt",
+        base_url: "https://sunnypt.top",
+        aliases: &["SunnyPT", "阳光"],
+    },
+    PtdSitePreset {
+        ptd_id: "tlzdigital",
+        name: "TLZ Digital",
+        site_type: "unit3d",
+        base_url: "https://tlzdigital.com",
+        aliases: &["TLZ"],
+    },
+    PtdSitePreset {
+        ptd_id: "traxary",
+        name: "Traxary",
+        site_type: "unit3d",
+        base_url: "https://beta.traxary.com",
+        aliases: &["TRX"],
+    },
+    PtdSitePreset {
+        ptd_id: "turkseed",
+        name: "TURKSEED",
+        site_type: "unit3d",
+        base_url: "https://turkseed.com",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "unwalled",
+        name: "Unwalled",
+        site_type: "unit3d",
+        base_url: "https://unwalled.cc",
+        aliases: &["UNW"],
+    },
+    PtdSitePreset {
+        ptd_id: "uploadcx",
+        name: "ULCX",
+        site_type: "unit3d",
+        base_url: "https://upload.cx",
+        aliases: &[],
+    },
+    PtdSitePreset {
+        ptd_id: "yuscene",
+        name: "YUSCENE",
+        site_type: "unit3d",
+        base_url: "https://yu-scene.net",
+        aliases: &["YS"],
+    },
+    PtdSitePreset {
+        ptd_id: "zenith",
+        name: "Zenith",
+        site_type: "unit3d",
+        base_url: "https://znth.cx",
+        aliases: &["ZNTH"],
+    },
+    PtdSitePreset {
+        ptd_id: "zhuque",
+        name: "朱雀",
+        site_type: "tnode",
+        base_url: "https://zhuque.in",
+        aliases: &["Zhuque"],
+    },
 ];
 
 #[cfg(test)]
@@ -1242,12 +1627,24 @@ mod tests {
 
     #[test]
     fn exposes_only_site_types_supported_by_kirara() {
-        assert_eq!(SITE_PRESETS.len(), 174);
+        assert_eq!(SITE_PRESETS.len(), 229);
         assert!(
             SITE_PRESETS
                 .iter()
-                .all(|site| matches!(site.site_type, "nexusphp" | "mteam" | "gazelle" | "unit3d"))
+                .all(|site| crate::site::SiteType::from_str(site.site_type).is_some()),
         );
+        for (ptd_id, site_type) in [
+            ("qingwa", "nexusphp"),
+            ("monikadesign", "unit3d"),
+            ("bitporn", "unit3d"),
+            ("rousipro", "rousi"),
+            ("zhuque", "tnode"),
+            ("sunnypt", "sunnypt"),
+            ("piggo", "piggo"),
+        ] {
+            let preset = SITE_PRESETS.iter().find(|site| site.ptd_id == ptd_id).unwrap();
+            assert_eq!(preset.site_type, site_type, "{ptd_id}");
+        }
         let mteam = SITE_PRESETS
             .iter()
             .find(|site| site.ptd_id == "mteam")

@@ -1,7 +1,252 @@
 {
-  "source_commit": "569a2a68cabbeeb1329d0e9ef52f6232e3723f8d",
-  "count": 340,
+  "source_commit": "50090c082cab1865874ff1831a9722c9bf3dfabd",
+  "count": 415,
   "sites": [
+    {
+      "ptd_id": "0dayfiles",
+      "schema": "unit3d",
+      "urls": [
+        "https://0dayfiles.net/"
+      ],
+      "base_url": "https://0dayfiles.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [
+        "dl.key-value > div:has(dt:contains('Points per hour')) > dd"
+      ],
+      "user_info_fields": {
+        "bonusPerHour": {
+          "selectors": [
+            "dl.key-value > div:has(dt:contains('Points per hour')) > dd"
+          ],
+          "attr": null
+        },
+        "seedingTime": {
+          "selectors": [
+            "dt:contains('Total seedtime') + dd"
+          ],
+          "attr": null
+        },
+        "isDonor": {
+          "selectors": [
+            "dt:contains('Active donor') + dd"
+          ],
+          "attr": null
+        },
+        "hnrUnsatisfied": {
+          "selectors": [
+            "div.hnr-tile:has(span.hnr-tile__label:contains('Torrents needing seeding')) span.hnr-tile__value",
+            "div.hnr-tiles > div.hnr-tile:nth-child(1) > span.hnr-tile__value"
+          ],
+          "attr": null
+        },
+        "hnrPreWarning": {
+          "selectors": [
+            "div.hnr-tile:has(span.hnr-tile__label:contains('Already warned')) span.hnr-tile__value",
+            "div.hnr-tiles > div.hnr-tile:nth-child(2) > span.hnr-tile__value"
+          ],
+          "attr": null
+        }
+      },
+      "user_info_processes": [
+        {
+          "path": "/",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "name",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            }
+          ]
+        },
+        {
+          "path": "/users/{name}",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "id",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "uploaded",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "downloaded",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "ratio",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "trueRatio",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "bonus",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "seeding",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "leeching",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "seedingSize",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "averageSeedingTime",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "levelName",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "messageCount",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "uploads",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "joinTime",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "lastAccessAt",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "invites",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            },
+            {
+              "field": "seedingTime",
+              "selectors": [
+                "dt:contains('Total seedtime') + dd"
+              ],
+              "attr": null
+            },
+            {
+              "field": "isDonor",
+              "selectors": [
+                "dt:contains('Active donor') + dd"
+              ],
+              "attr": null
+            }
+          ]
+        },
+        {
+          "path": "/users/{name}/earnings",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "bonusPerHour",
+              "selectors": [
+                "dl.key-value > div:has(dt:contains('Points per hour')) > dd"
+              ],
+              "attr": null
+            }
+          ]
+        },
+        {
+          "path": "/users/{name}/hit-and-runs",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "hnrUnsatisfied",
+              "selectors": [
+                "div.hnr-tile:has(span.hnr-tile__label:contains('Torrents needing seeding')) span.hnr-tile__value",
+                "div.hnr-tiles > div.hnr-tile:nth-child(1) > span.hnr-tile__value"
+              ],
+              "attr": null
+            },
+            {
+              "field": "hnrPreWarning",
+              "selectors": [
+                "div.hnr-tile:has(span.hnr-tile__label:contains('Already warned')) span.hnr-tile__value",
+                "div.hnr-tiles > div.hnr-tile:nth-child(2) > span.hnr-tile__value"
+              ],
+              "attr": null
+            }
+          ]
+        }
+      ],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": "/users/{name}",
+      "profile_query": null,
+      "identity_path": "/users/{name}",
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": [
+        "/",
+        "/users/$name$",
+        "/users/$name$/earnings",
+        "/users/$name$/hit-and-runs"
+      ]
+    },
     {
       "ptd_id": "0magnet",
       "schema": "nexusphp",
@@ -188,32 +433,19 @@
         "https://www.52movie.top/"
       ],
       "base_url": "https://www.52movie.top/",
-      "bonus_labels": [
-        "Karma"
-      ],
+      "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
       "uploaded_selectors": [],
       "downloaded_selectors": [],
-      "bonus_selectors": [
-        "td.rowhead:contains('魔力值') + td",
-        "td.rowhead:contains('Karma'):contains('Points') + td"
-      ],
+      "bonus_selectors": [],
       "ratio_selectors": [],
       "seeding_selectors": [],
       "leeching_selectors": [],
       "message_selectors": [],
       "level_selectors": [],
       "bonus_per_hour_selectors": [],
-      "user_info_fields": {
-        "bonus": {
-          "selectors": [
-            "td.rowhead:contains('魔力值') + td",
-            "td.rowhead:contains('Karma'):contains('Points') + td"
-          ],
-          "attr": null
-        }
-      },
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -221,7 +453,7 @@
       "profile_query": null,
       "identity_path": null,
       "identity_query": null,
-      "donor_bonus_multiplier": 1.0,
+      "donor_bonus_multiplier": null,
       "ajax_referer": null,
       "ajax_disabled": false,
       "json_user_stats": null,
@@ -782,6 +1014,39 @@
       "process_urls": []
     },
     {
+      "ptd_id": "anibt",
+      "schema": "nexusphp",
+      "urls": [
+        "https://anibt.net/"
+      ],
+      "base_url": "https://anibt.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "animebytes",
       "schema": "gazelle",
       "urls": [
@@ -1064,6 +1329,39 @@
       ]
     },
     {
+      "ptd_id": "animeclipse",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.animeclipse.com/"
+      ],
+      "base_url": "https://www.animeclipse.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "animelovers",
       "schema": "unit3d",
       "urls": [
@@ -1262,7 +1560,14 @@
           "selectors": [
             "ul.stats li:contains('Joined:') span"
           ],
-          "attr": "title"
+          "attr": null
+        },
+        "lastAccessAt": {
+          "selectors": [
+            "ul.stats li:contains('Last seen') span",
+            "ul.stats li:contains('Last Seen') span"
+          ],
+          "attr": null
         },
         "bonus": {
           "selectors": [
@@ -1351,13 +1656,15 @@
               "selectors": [
                 "ul.stats li:contains('Joined:') span"
               ],
-              "attr": "title"
+              "attr": null
             },
             {
               "field": "lastAccessAt",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
+              "selectors": [
+                "ul.stats li:contains('Last seen') span",
+                "ul.stats li:contains('Last Seen') span"
+              ],
+              "attr": null
             },
             {
               "field": "seedingSize",
@@ -1870,18 +2177,9 @@
       "seeding_selectors": [],
       "leeching_selectors": [],
       "message_selectors": [],
-      "level_selectors": [
-        ".wow-badges .wow-badge:first-child"
-      ],
+      "level_selectors": [],
       "bonus_per_hour_selectors": [],
-      "user_info_fields": {
-        "levelName": {
-          "selectors": [
-            ".wow-badges .wow-badge:first-child"
-          ],
-          "attr": null
-        }
-      },
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -2264,6 +2562,39 @@
       ]
     },
     {
+      "ptd_id": "bangumimoe",
+      "schema": "nexusphp",
+      "urls": [
+        "https://bangumi.moe/"
+      ],
+      "base_url": "https://bangumi.moe/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "baozi",
       "schema": "nexusphp",
       "urls": [
@@ -2533,7 +2864,7 @@
           ],
           "attr": null
         },
-        "specialSeedsize": {
+        "specialSeedingSize": {
           "selectors": [
             "td.bhd-user-left:contains('Special Seed Size') + td span.badge-user"
           ],
@@ -2723,6 +3054,40 @@
       ]
     },
     {
+      "ptd_id": "bigfangroup",
+      "schema": "nexusphp",
+      "urls": [
+        "https://bigfangroup.org/",
+        "https://www.freebfg.org/"
+      ],
+      "base_url": "https://bigfangroup.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "bitbr",
       "schema": "nexusphp",
       "urls": [
@@ -2732,63 +3097,16 @@
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
-      "uploaded_selectors": [
-        "span.medium"
-      ],
-      "downloaded_selectors": [
-        "span.medium"
-      ],
-      "bonus_selectors": [
-        "table.main tbody tbody td:contains(Pontos Karma)"
-      ],
-      "ratio_selectors": [
-        "span.medium"
-      ],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
       "seeding_selectors": [],
       "leeching_selectors": [],
       "message_selectors": [],
-      "level_selectors": [
-        "table.main tbody tbody td:contains(Classe)"
-      ],
+      "level_selectors": [],
       "bonus_per_hour_selectors": [],
-      "user_info_fields": {
-        "uploaded": {
-          "selectors": [
-            "span.medium"
-          ],
-          "attr": null
-        },
-        "downloaded": {
-          "selectors": [
-            "span.medium"
-          ],
-          "attr": null
-        },
-        "ratio": {
-          "selectors": [
-            "span.medium"
-          ],
-          "attr": null
-        },
-        "levelName": {
-          "selectors": [
-            "table.main tbody tbody td:contains(Classe)"
-          ],
-          "attr": null
-        },
-        "bonus": {
-          "selectors": [
-            "table.main tbody tbody td:contains(Pontos Karma)"
-          ],
-          "attr": null
-        },
-        "joinTime": {
-          "selectors": [
-            "table.main tbody tbody tr:nth-child(3) td:nth-child(2)"
-          ],
-          "attr": null
-        }
-      },
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -3077,6 +3395,39 @@
         "/index.php",
         "/userdetails.php"
       ]
+    },
+    {
+      "ptd_id": "blueroms",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.blueroms.ws/"
+      ],
+      "base_url": "https://www.blueroms.ws/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
     },
     {
       "ptd_id": "blutopia",
@@ -3759,6 +4110,109 @@
       ]
     },
     {
+      "ptd_id": "byrutor",
+      "schema": "nexusphp",
+      "urls": [
+        "https://byrutgame.org/"
+      ],
+      "base_url": "https://byrutgame.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "c411",
+      "schema": "abstractprivatesite",
+      "urls": [
+        "https://c411.org/"
+      ],
+      "base_url": "https://c411.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [
+        "transfer.uploaded.total"
+      ],
+      "downloaded_selectors": [
+        "transfer.downloaded.total"
+      ],
+      "bonus_selectors": [
+        "zen.balance"
+      ],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {
+        "uploaded": {
+          "selectors": [
+            "transfer.uploaded.total"
+          ],
+          "attr": null
+        },
+        "downloaded": {
+          "selectors": [
+            "transfer.downloaded.total"
+          ],
+          "attr": null
+        },
+        "trueUploaded": {
+          "selectors": [
+            "transfer.uploaded.actual"
+          ],
+          "attr": null
+        },
+        "trueDownloaded": {
+          "selectors": [
+            "transfer.downloaded.actual"
+          ],
+          "attr": null
+        },
+        "bonus": {
+          "selectors": [
+            "zen.balance"
+          ],
+          "attr": null
+        }
+      },
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "capybarabr",
       "schema": "unit3d",
       "urls": [
@@ -3831,6 +4285,39 @@
         "https://www.cathode-ray.tube/"
       ],
       "base_url": "https://www.cathode-ray.tube/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "catorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "https://catorrent.net/"
+      ],
+      "base_url": "https://catorrent.net/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -3972,32 +4459,19 @@
         "https://pt.cdy.pics/"
       ],
       "base_url": "https://pt.cdy.pics/",
-      "bonus_labels": [
-        "Karma"
-      ],
+      "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
       "uploaded_selectors": [],
       "downloaded_selectors": [],
-      "bonus_selectors": [
-        "td.rowhead:contains('魔力值') + td",
-        "td.rowhead:contains('Karma'):contains('Points') + td"
-      ],
+      "bonus_selectors": [],
       "ratio_selectors": [],
       "seeding_selectors": [],
       "leeching_selectors": [],
       "message_selectors": [],
       "level_selectors": [],
       "bonus_per_hour_selectors": [],
-      "user_info_fields": {
-        "bonus": {
-          "selectors": [
-            "td.rowhead:contains('魔力值') + td",
-            "td.rowhead:contains('Karma'):contains('Points') + td"
-          ],
-          "attr": null
-        }
-      },
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -4005,7 +4479,7 @@
       "profile_query": null,
       "identity_path": null,
       "identity_query": null,
-      "donor_bonus_multiplier": 1.0,
+      "donor_bonus_multiplier": null,
       "ajax_referer": null,
       "ajax_disabled": false,
       "json_user_stats": null,
@@ -4054,21 +4528,36 @@
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
-      "uploaded_selectors": [],
-      "downloaded_selectors": [],
-      "bonus_selectors": [],
-      "ratio_selectors": [],
-      "seeding_selectors": [],
-      "leeching_selectors": [],
+      "uploaded_selectors": [
+        "a.stat-card[href*='/seeding'] span.stat-card-value"
+      ],
+      "downloaded_selectors": [
+        "a.stat-card[href*='/leeching'] span.stat-card-value"
+      ],
+      "bonus_selectors": [
+        "#header-credits-balance"
+      ],
+      "ratio_selectors": [
+        "a.stat-card[href*='/ratio'] span.stat-card-value"
+      ],
+      "seeding_selectors": [
+        "dt:contains('Seeding'):not(:contains('size')) + dd"
+      ],
+      "leeching_selectors": [
+        "dt:contains('Leeching') + dd"
+      ],
       "message_selectors": [
         "a#userDropdownTrigger .user-notification-badge"
       ],
-      "level_selectors": [],
+      "level_selectors": [
+        ".userclass-badge"
+      ],
       "bonus_per_hour_selectors": [],
       "user_info_fields": {
         "id": {
           "selectors": [
-            "div.user-dropdown-section a[href^='/user/']"
+            "div.user-dropdown-section a[href^='/user/']",
+            "a.quick-action-btn[href^='/user/']"
           ],
           "attr": "href"
         },
@@ -4079,9 +4568,81 @@
           ],
           "attr": null
         },
+        "uploaded": {
+          "selectors": [
+            "a.stat-card[href*='/seeding'] span.stat-card-value"
+          ],
+          "attr": null
+        },
+        "downloaded": {
+          "selectors": [
+            "a.stat-card[href*='/leeching'] span.stat-card-value"
+          ],
+          "attr": null
+        },
+        "ratio": {
+          "selectors": [
+            "a.stat-card[href*='/ratio'] span.stat-card-value"
+          ],
+          "attr": null
+        },
+        "bonus": {
+          "selectors": [
+            "#header-credits-balance"
+          ],
+          "attr": null
+        },
+        "invites": {
+          "selectors": [
+            "a[href*='/invite'] span.link-badge"
+          ],
+          "attr": null
+        },
         "messageCount": {
           "selectors": [
             "a#userDropdownTrigger .user-notification-badge"
+          ],
+          "attr": null
+        },
+        "joinTime": {
+          "selectors": [
+            ".profile-hero__since .small:contains('Joined') .time"
+          ],
+          "attr": "title"
+        },
+        "lastAccessAt": {
+          "selectors": [
+            ".profile-hero__since .small:contains('Last seen') .time"
+          ],
+          "attr": "title"
+        },
+        "levelName": {
+          "selectors": [
+            ".userclass-badge"
+          ],
+          "attr": null
+        },
+        "uploads": {
+          "selectors": [
+            "dt:contains('Uploads') + dd"
+          ],
+          "attr": null
+        },
+        "seeding": {
+          "selectors": [
+            "dt:contains('Seeding'):not(:contains('size')) + dd"
+          ],
+          "attr": null
+        },
+        "leeching": {
+          "selectors": [
+            "dt:contains('Leeching') + dd"
+          ],
+          "attr": null
+        },
+        "snatches": {
+          "selectors": [
+            "dt:contains('Snatched') + dd"
           ],
           "attr": null
         }
@@ -4096,9 +4657,60 @@
             {
               "field": "id",
               "selectors": [
-                "div.user-dropdown-section a[href^='/user/']"
+                "div.user-dropdown-section a[href^='/user/']",
+                "a.quick-action-btn[href^='/user/']"
               ],
               "attr": "href"
+            },
+            {
+              "field": "name",
+              "selectors": [
+                "a#userDropdownTrigger",
+                "span.user_name"
+              ],
+              "attr": null
+            },
+            {
+              "field": "uploaded",
+              "selectors": [
+                "a.stat-card[href*='/seeding'] span.stat-card-value"
+              ],
+              "attr": null
+            },
+            {
+              "field": "downloaded",
+              "selectors": [
+                "a.stat-card[href*='/leeching'] span.stat-card-value"
+              ],
+              "attr": null
+            },
+            {
+              "field": "ratio",
+              "selectors": [
+                "a.stat-card[href*='/ratio'] span.stat-card-value"
+              ],
+              "attr": null
+            },
+            {
+              "field": "bonus",
+              "selectors": [
+                "#header-credits-balance"
+              ],
+              "attr": null
+            },
+            {
+              "field": "invites",
+              "selectors": [
+                "a[href*='/invite'] span.link-badge"
+              ],
+              "attr": null
+            },
+            {
+              "field": "messageCount",
+              "selectors": [
+                "a#userDropdownTrigger .user-notification-badge"
+              ],
+              "attr": null
             }
           ]
         },
@@ -4109,98 +4721,60 @@
           "response_type": "document",
           "fields": [
             {
-              "field": "name",
-              "selectors": [
-                "a#userDropdownTrigger",
-                "span.user_name"
-              ],
-              "attr": null
-            },
-            {
               "field": "joinTime",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
+              "selectors": [
+                ".profile-hero__since .small:contains('Joined') .time"
+              ],
+              "attr": "title"
             },
             {
               "field": "lastAccessAt",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "uploaded",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "downloaded",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
+              "selectors": [
+                ".profile-hero__since .small:contains('Last seen') .time"
+              ],
+              "attr": "title"
             },
             {
               "field": "levelName",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "bonus",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "ratio",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "uploads",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "bonusPerHour",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "seeding",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "seedingSize",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
-            },
-            {
-              "field": "messageCount",
               "selectors": [
-                "a#userDropdownTrigger .user-notification-badge"
+                ".userclass-badge"
               ],
               "attr": null
             },
             {
-              "field": "posts",
-              "selectors": [],
-              "attr": null,
-              "json_path": null
+              "field": "uploads",
+              "selectors": [
+                "dt:contains('Uploads') + dd"
+              ],
+              "attr": null
+            },
+            {
+              "field": "seeding",
+              "selectors": [
+                "dt:contains('Seeding'):not(:contains('size')) + dd"
+              ],
+              "attr": null
+            },
+            {
+              "field": "leeching",
+              "selectors": [
+                "dt:contains('Leeching') + dd"
+              ],
+              "attr": null
+            },
+            {
+              "field": "snatches",
+              "selectors": [
+                "dt:contains('Snatched') + dd"
+              ],
+              "attr": null
             }
           ]
         }
       ],
       "bonus_page_path": null,
       "bonus_page_query": null,
-      "profile_path": "/user/{uid}",
+      "profile_path": "/",
       "profile_query": null,
       "identity_path": "/",
       "identity_query": null,
@@ -4619,6 +5193,184 @@
       "process_urls": []
     },
     {
+      "ptd_id": "colapt",
+      "schema": "reelcore",
+      "urls": [
+        "https://www.colapt.com/"
+      ],
+      "base_url": "https://www.colapt.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [
+        "stats.points"
+      ],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [
+        "level.title"
+      ],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {
+        "uploads": {
+          "selectors": [
+            "contributions.torrents"
+          ],
+          "attr": null
+        },
+        "bonus": {
+          "selectors": [
+            "stats.points"
+          ],
+          "attr": null
+        },
+        "levelId": {
+          "selectors": [
+            "level.rank"
+          ],
+          "attr": null
+        },
+        "levelName": {
+          "selectors": [
+            "level.title"
+          ],
+          "attr": null
+        },
+        "trueRatio": {
+          "selectors": [
+            "stats.ratio"
+          ],
+          "attr": null
+        }
+      },
+      "user_info_processes": [
+        {
+          "path": "/api/v1/me",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": []
+        },
+        {
+          "path": "/api/v1/users/{uid}/profile",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "uploads",
+              "selectors": [
+                "contributions.torrents"
+              ],
+              "attr": null
+            },
+            {
+              "field": "bonus",
+              "selectors": [
+                "stats.points"
+              ],
+              "attr": null
+            }
+          ]
+        },
+        {
+          "path": "/api/v1/me/points/ledger",
+          "query": "page=1&page_size=1&kind=seed_reward",
+          "method": "GET",
+          "response_type": "document",
+          "fields": []
+        },
+        {
+          "path": "/api/v1/me/stats",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "seedingSize",
+              "selectors": [],
+              "attr": null,
+              "json_path": null
+            }
+          ]
+        },
+        {
+          "path": "/api/v1/me/rank",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "levelId",
+              "selectors": [
+                "level.rank"
+              ],
+              "attr": null
+            },
+            {
+              "field": "levelName",
+              "selectors": [
+                "level.title"
+              ],
+              "attr": null
+            },
+            {
+              "field": "trueRatio",
+              "selectors": [
+                "stats.ratio"
+              ],
+              "attr": null
+            }
+          ]
+        },
+        {
+          "path": "/api/v1/me/cola",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": []
+        },
+        {
+          "path": "/api/v1/me/invitations/quotas",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": []
+        },
+        {
+          "path": "/api/v1/me/messages/summary",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": []
+        }
+      ],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": "/api/v1/me/rank",
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": [
+        "/api/v1/me",
+        "/api/v1/users/$id$/profile",
+        "/api/v1/me/points/ledger",
+        "/api/v1/me/stats",
+        "/api/v1/me/rank",
+        "/api/v1/me/cola",
+        "/api/v1/me/invitations/quotas",
+        "/api/v1/me/messages/summary"
+      ]
+    },
+    {
       "ptd_id": "concen",
       "schema": "nexusphp",
       "urls": [
@@ -4694,6 +5446,39 @@
       "bonus_labels": [
         "蟹币值"
       ],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "crackingpatching",
+      "schema": "nexusphp",
+      "urls": [
+        "https://crackingpatching.com/"
+      ],
+      "base_url": "https://crackingpatching.com/",
+      "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
       "uploaded_selectors": [],
@@ -4836,6 +5621,39 @@
         "https://dajiao.cyou/"
       ],
       "base_url": "https://dajiao.cyou/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "damagnet",
+      "schema": "nexusphp",
+      "urls": [
+        "https://damag.net/"
+      ],
+      "base_url": "https://damag.net/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -5262,6 +6080,39 @@
       ]
     },
     {
+      "ptd_id": "dirtybytes",
+      "schema": "rartracker",
+      "urls": [
+        "https://dirtybytes.net/"
+      ],
+      "base_url": "https://dirtybytes.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "discfan",
       "schema": "nexusphp",
       "urls": [
@@ -5359,6 +6210,150 @@
       "ajax_disabled": false,
       "json_user_stats": null,
       "process_urls": []
+    },
+    {
+      "ptd_id": "dreadvault",
+      "schema": "unit3d",
+      "urls": [
+        "https://dreadvault.org/"
+      ],
+      "base_url": "https://dreadvault.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {
+        "name": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "username"
+        },
+        "levelName": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "group"
+        },
+        "uploaded": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "uploaded"
+        },
+        "downloaded": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "downloaded"
+        },
+        "ratio": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "ratio"
+        },
+        "bonus": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "seedbonus"
+        },
+        "seeding": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "seeding"
+        },
+        "leeching": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "leeching"
+        },
+        "hnrUnsatisfied": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "hit_and_runs"
+        }
+      },
+      "user_info_processes": [
+        {
+          "path": "/api/user",
+          "query": "",
+          "method": "GET",
+          "response_type": "json",
+          "fields": [
+            {
+              "field": "name",
+              "selectors": [],
+              "attr": null,
+              "json_path": "username"
+            },
+            {
+              "field": "levelName",
+              "selectors": [],
+              "attr": null,
+              "json_path": "group"
+            },
+            {
+              "field": "uploaded",
+              "selectors": [],
+              "attr": null,
+              "json_path": "uploaded"
+            },
+            {
+              "field": "downloaded",
+              "selectors": [],
+              "attr": null,
+              "json_path": "downloaded"
+            },
+            {
+              "field": "ratio",
+              "selectors": [],
+              "attr": null,
+              "json_path": "ratio"
+            },
+            {
+              "field": "bonus",
+              "selectors": [],
+              "attr": null,
+              "json_path": "seedbonus"
+            },
+            {
+              "field": "seeding",
+              "selectors": [],
+              "attr": null,
+              "json_path": "seeding"
+            },
+            {
+              "field": "leeching",
+              "selectors": [],
+              "attr": null,
+              "json_path": "leeching"
+            },
+            {
+              "field": "hnrUnsatisfied",
+              "selectors": [],
+              "attr": null,
+              "json_path": "hit_and_runs"
+            }
+          ]
+        }
+      ],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": [
+        "/api/user"
+      ]
     },
     {
       "ptd_id": "dstudio",
@@ -5577,9 +6572,9 @@
       "ptd_id": "emuwarez",
       "schema": "unit3d",
       "urls": [
-        "https://emuwarez.com/"
+        "https://emu-warez.com/"
       ],
-      "base_url": "https://emuwarez.com/",
+      "base_url": "https://emu-warez.com/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -5648,6 +6643,41 @@
         "https://extranet.torrentbay.st/"
       ],
       "base_url": "https://ext.to/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "eztv",
+      "schema": "nexusphp",
+      "urls": [
+        "https://eztvx.to/",
+        "https://eztv.wf/",
+        "https://eztv.tf/"
+      ],
+      "base_url": "https://eztvx.to/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -6001,6 +7031,39 @@
       ]
     },
     {
+      "ptd_id": "filemood",
+      "schema": "nexusphp",
+      "urls": [
+        "https://filemood.com/"
+      ],
+      "base_url": "https://filemood.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "filept",
       "schema": "nexusphp",
       "urls": [
@@ -6062,6 +7125,39 @@
           "attr": null
         }
       },
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "freejavtorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.freejavtorrent.com/"
+      ],
+      "base_url": "https://www.freejavtorrent.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -6559,89 +7655,26 @@
       "downloaded_labels": [],
       "uploaded_selectors": [],
       "downloaded_selectors": [],
-      "bonus_selectors": [
-        "a[href*='seedbonus']:first"
-      ],
+      "bonus_selectors": [],
       "ratio_selectors": [],
-      "seeding_selectors": [
-        "span[title='Seed']"
-      ],
+      "seeding_selectors": [],
       "leeching_selectors": [],
       "message_selectors": [],
       "level_selectors": [],
       "bonus_per_hour_selectors": [],
-      "user_info_fields": {
-        "id": {
-          "selectors": [
-            "a[href*='usercp.php']:first"
-          ],
-          "attr": "href"
-        },
-        "bonus": {
-          "selectors": [
-            "a[href*='seedbonus']:first"
-          ],
-          "attr": null
-        },
-        "seeding": {
-          "selectors": [
-            "span[title='Seed']"
-          ],
-          "attr": null
-        }
-      },
-      "user_info_processes": [
-        {
-          "path": "/index.php",
-          "query": "",
-          "method": "GET",
-          "response_type": "document",
-          "fields": [
-            {
-              "field": "id",
-              "selectors": [
-                "a[href*='usercp.php']:first"
-              ],
-              "attr": "href"
-            },
-            {
-              "field": "bonus",
-              "selectors": [
-                "a[href*='seedbonus']:first"
-              ],
-              "attr": null
-            },
-            {
-              "field": "seeding",
-              "selectors": [
-                "span[title='Seed']"
-              ],
-              "attr": null
-            }
-          ]
-        },
-        {
-          "path": "/usercp.php",
-          "query": "uid={uid}",
-          "method": "GET",
-          "response_type": "document",
-          "fields": []
-        }
-      ],
+      "user_info_fields": {},
+      "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
       "profile_path": null,
       "profile_query": null,
-      "identity_path": "/index.php",
+      "identity_path": null,
       "identity_query": null,
       "donor_bonus_multiplier": null,
       "ajax_referer": null,
       "ajax_disabled": false,
       "json_user_stats": null,
-      "process_urls": [
-        "/index.php",
-        "/usercp.php"
-      ]
+      "process_urls": []
     },
     {
       "ptd_id": "gtru",
@@ -7431,9 +8464,9 @@
       "ptd_id": "hdchina",
       "schema": "nexusphp",
       "urls": [
-        "https://hdchina.org/"
+        "https://hdwing.org/"
       ],
-      "base_url": "https://hdchina.org/",
+      "base_url": "https://hdwing.org/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -7772,9 +8805,9 @@
       "ptd_id": "hddolby",
       "schema": "nexusphp",
       "urls": [
-        "https://www.hddolby.com/"
+        "https://www.uhddolby.com/"
       ],
-      "base_url": "https://www.hddolby.com/",
+      "base_url": "https://www.uhddolby.com/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -9656,37 +10689,24 @@
     },
     {
       "ptd_id": "hxpt",
-      "schema": "nexusphp",
+      "schema": "fluxtorrent",
       "urls": [
         "https://www.hxpt.org/"
       ],
       "base_url": "https://www.hxpt.org/",
-      "bonus_labels": [
-        "Karma"
-      ],
+      "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
       "uploaded_selectors": [],
       "downloaded_selectors": [],
-      "bonus_selectors": [
-        "td.rowhead:contains('火花') + td",
-        "td.rowhead:contains('Karma'):contains('Points') + td"
-      ],
+      "bonus_selectors": [],
       "ratio_selectors": [],
       "seeding_selectors": [],
       "leeching_selectors": [],
       "message_selectors": [],
       "level_selectors": [],
       "bonus_per_hour_selectors": [],
-      "user_info_fields": {
-        "bonus": {
-          "selectors": [
-            "td.rowhead:contains('火花') + td",
-            "td.rowhead:contains('Karma'):contains('Points') + td"
-          ],
-          "attr": null
-        }
-      },
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -9973,6 +10993,72 @@
         "/userdetails.php",
         "/mybonus.php"
       ]
+    },
+    {
+      "ptd_id": "infinityhd",
+      "schema": "unit3d",
+      "urls": [
+        "https://infinityhd.net/"
+      ],
+      "base_url": "https://infinityhd.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "internetarchive",
+      "schema": "nexusphp",
+      "urls": [
+        "https://archive.org/"
+      ],
+      "base_url": "https://archive.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
     },
     {
       "ptd_id": "iptorrents",
@@ -10924,6 +12010,76 @@
       "process_urls": []
     },
     {
+      "ptd_id": "kickasstorrentsto",
+      "schema": "nexusphp",
+      "urls": [
+        "https://kickass.torrentbay.st/",
+        "https://kickass.torrentsbay.org/",
+        "https://kickasstorrents.proxyninja.org/"
+      ],
+      "base_url": "https://kickass.torrentbay.st/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "kickasstorrentsws",
+      "schema": "nexusphp",
+      "urls": [
+        "https://kickasstorrents.bz/",
+        "https://kkickass.com/",
+        "https://kkat.net/"
+      ],
+      "base_url": "https://kickasstorrents.bz/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "kimoji",
       "schema": "unit3d",
       "urls": [
@@ -11389,6 +12545,74 @@
       "process_urls": []
     },
     {
+      "ptd_id": "limetorrents",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.limetorrents.fun/",
+        "https://limetorrents.torrentbay.st/",
+        "https://limetorrents.torrentsbay.org/"
+      ],
+      "base_url": "https://www.limetorrents.fun/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "linuxtracker",
+      "schema": "nexusphp",
+      "urls": [
+        "https://linuxtracker.org/"
+      ],
+      "base_url": "https://linuxtracker.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "longpt",
       "schema": "nexusphp",
       "urls": [
@@ -11771,6 +12995,103 @@
       "process_urls": []
     },
     {
+      "ptd_id": "mactorrentsdownload",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.torrentmac.net/"
+      ],
+      "base_url": "https://www.torrentmac.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "magnetdownload",
+      "schema": "nexusphp",
+      "urls": [],
+      "base_url": null,
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "magnetz",
+      "schema": "torznab",
+      "urls": [
+        "https://magnetz.eu/"
+      ],
+      "base_url": "https://magnetz.eu/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "march",
       "schema": "nexusphp",
       "urls": [
@@ -11814,12 +13135,78 @@
       "process_urls": []
     },
     {
+      "ptd_id": "megapeer",
+      "schema": "nexusphp",
+      "urls": [
+        "https://megapeer.vip/"
+      ],
+      "base_url": "https://megapeer.vip/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "midnightscene",
       "schema": "unit3d",
       "urls": [
         "https://midnightscene.cc/"
       ],
       "base_url": "https://midnightscene.cc/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "mikan",
+      "schema": "nexusphp",
+      "urls": [
+        "https://mikanani.me/"
+      ],
+      "base_url": "https://mikanani.me/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -11954,6 +13341,39 @@
         "https://mine.pt/"
       ],
       "base_url": "https://mine.pt/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "mixtapetorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "http://www.mixtapetorrent.com/"
+      ],
+      "base_url": "http://www.mixtapetorrent.com/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -12743,6 +14163,39 @@
       ]
     },
     {
+      "ptd_id": "mypornclub",
+      "schema": "nexusphp",
+      "urls": [
+        "https://myporn.club/"
+      ],
+      "base_url": "https://myporn.club/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "mypt",
       "schema": "nexusphp",
       "urls": [
@@ -12783,6 +14236,66 @@
       "ajax_disabled": false,
       "json_user_stats": null,
       "process_urls": []
+    },
+    {
+      "ptd_id": "myspleen",
+      "schema": "abstractprivatesite",
+      "urls": [
+        "https://www.myspleen.org/"
+      ],
+      "base_url": "https://www.myspleen.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [
+        "span.key:contains(\"Ratio\") + span.value"
+      ],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {
+        "ratio": {
+          "selectors": [
+            "span.key:contains(\"Ratio\") + span.value"
+          ],
+          "attr": null
+        }
+      },
+      "user_info_processes": [
+        {
+          "path": "/browse.php",
+          "query": "",
+          "method": "GET",
+          "response_type": "document",
+          "fields": [
+            {
+              "field": "ratio",
+              "selectors": [
+                "span.key:contains(\"Ratio\") + span.value"
+              ],
+              "attr": null
+            }
+          ]
+        }
+      ],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": [
+        "/browse.php"
+      ]
     },
     {
       "ptd_id": "nanyangpt",
@@ -13209,6 +14722,39 @@
       "process_urls": []
     },
     {
+      "ptd_id": "newstudio",
+      "schema": "nexusphp",
+      "urls": [
+        "https://newstudio.tv/"
+      ],
+      "base_url": "https://newstudio.tv/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "nexushd",
       "schema": "nexusphp",
       "urls": [
@@ -13276,12 +14822,78 @@
       "process_urls": []
     },
     {
+      "ptd_id": "nipponsei",
+      "schema": "nexusphp",
+      "urls": [
+        "https://nipponsei.minglong.org/"
+      ],
+      "base_url": "https://nipponsei.minglong.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "njtupt",
       "schema": "nexusphp",
       "urls": [
         "https://njtupt.top/"
       ],
       "base_url": "https://njtupt.top/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "nonameclub",
+      "schema": "nexusphp",
+      "urls": [
+        "https://nnmclub.to/"
+      ],
+      "base_url": "https://nnmclub.to/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -13657,7 +15269,8 @@
       "schema": "nexusphp",
       "urls": [
         "https://nyaa.si/",
-        "https://sukebei.nyaa.si/"
+        "https://sukebei.nyaa.si/",
+        "https://nyaa.mom/"
       ],
       "base_url": "https://nyaa.si/",
       "bonus_labels": [],
@@ -13753,6 +15366,39 @@
       "process_urls": []
     },
     {
+      "ptd_id": "onejav",
+      "schema": "nexusphp",
+      "urls": [
+        "https://onejav.com/"
+      ],
+      "base_url": "https://onejav.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "onlyencodes",
       "schema": "unit3d",
       "urls": [
@@ -13813,6 +15459,39 @@
           "attr": null
         }
       },
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "opensharing",
+      "schema": "nexusphp",
+      "urls": [
+        "https://opensharing.org/"
+      ],
+      "base_url": "https://opensharing.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -13967,6 +15646,39 @@
           "attr": null
         }
       },
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "pandacd",
+      "schema": "torznab",
+      "urls": [
+        "https://pandacd.io/"
+      ],
+      "base_url": "https://pandacd.io/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
       "user_info_processes": [],
       "bonus_page_path": null,
       "bonus_page_query": null,
@@ -14250,6 +15962,72 @@
       ]
     },
     {
+      "ptd_id": "pctorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "https://pc-torrents.games/"
+      ],
+      "base_url": "https://pc-torrents.games/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "peergarden",
+      "schema": "unit3d",
+      "urls": [
+        "https://peergarden.org/"
+      ],
+      "base_url": "https://peergarden.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "piggo",
       "schema": "nexusphp",
       "urls": [
@@ -14343,6 +16121,39 @@
         "https://playlet.cc/"
       ],
       "base_url": "https://playlet.cc/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "plugintorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "https://plugintorrent.com/"
+      ],
+      "base_url": "https://plugintorrent.com/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -14675,6 +16486,105 @@
         "/forum/index.php",
         "/forum/profile.php"
       ]
+    },
+    {
+      "ptd_id": "pornotorrent",
+      "schema": "torznab",
+      "urls": [
+        "https://pornotorrent.com.br/"
+      ],
+      "base_url": "https://pornotorrent.com.br/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "pornrips",
+      "schema": "nexusphp",
+      "urls": [
+        "https://pornrips.to/"
+      ],
+      "base_url": "https://pornrips.to/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "pornxlab",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.pornxlab.com/"
+      ],
+      "base_url": "https://www.pornxlab.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
     },
     {
       "ptd_id": "portugas",
@@ -15268,9 +17178,10 @@
       "ptd_id": "ptskit",
       "schema": "nexusphp",
       "urls": [
+        "https://www.ptskit.com/",
         "https://www.ptskit.org/"
       ],
-      "base_url": "https://www.ptskit.org/",
+      "base_url": "https://www.ptskit.com/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -15615,7 +17526,7 @@
       "identity_path": "/",
       "identity_query": null,
       "donor_bonus_multiplier": null,
-      "ajax_referer": "https://pussytorrents.org/user/account/snatchlist",
+      "ajax_referer": null,
       "ajax_disabled": false,
       "json_user_stats": null,
       "process_urls": [
@@ -16136,6 +18047,150 @@
       ]
     },
     {
+      "ptd_id": "retromoviesclub",
+      "schema": "unit3d",
+      "urls": [
+        "https://retro-movies.club/"
+      ],
+      "base_url": "https://retro-movies.club/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {
+        "name": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "username"
+        },
+        "levelName": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "group"
+        },
+        "uploaded": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "uploaded"
+        },
+        "downloaded": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "downloaded"
+        },
+        "ratio": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "ratio"
+        },
+        "bonus": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "seedbonus"
+        },
+        "seeding": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "seeding"
+        },
+        "leeching": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "leeching"
+        },
+        "hnrUnsatisfied": {
+          "selectors": [],
+          "attr": null,
+          "json_path": "hit_and_runs"
+        }
+      },
+      "user_info_processes": [
+        {
+          "path": "/api/user",
+          "query": "",
+          "method": "GET",
+          "response_type": "json",
+          "fields": [
+            {
+              "field": "name",
+              "selectors": [],
+              "attr": null,
+              "json_path": "username"
+            },
+            {
+              "field": "levelName",
+              "selectors": [],
+              "attr": null,
+              "json_path": "group"
+            },
+            {
+              "field": "uploaded",
+              "selectors": [],
+              "attr": null,
+              "json_path": "uploaded"
+            },
+            {
+              "field": "downloaded",
+              "selectors": [],
+              "attr": null,
+              "json_path": "downloaded"
+            },
+            {
+              "field": "ratio",
+              "selectors": [],
+              "attr": null,
+              "json_path": "ratio"
+            },
+            {
+              "field": "bonus",
+              "selectors": [],
+              "attr": null,
+              "json_path": "seedbonus"
+            },
+            {
+              "field": "seeding",
+              "selectors": [],
+              "attr": null,
+              "json_path": "seeding"
+            },
+            {
+              "field": "leeching",
+              "selectors": [],
+              "attr": null,
+              "json_path": "leeching"
+            },
+            {
+              "field": "hnrUnsatisfied",
+              "selectors": [],
+              "attr": null,
+              "json_path": "hit_and_runs"
+            }
+          ]
+        }
+      ],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": [
+        "/api/user"
+      ]
+    },
+    {
       "ptd_id": "retrotoon",
       "schema": "abstractprivatesite",
       "urls": [
@@ -16322,6 +18377,40 @@
         "/userdetails.php",
         "/ajax_peers.php"
       ]
+    },
+    {
+      "ptd_id": "rintornet",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.rintor.net/",
+        "https://rintor.net/"
+      ],
+      "base_url": "https://www.rintor.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
     },
     {
       "ptd_id": "rockethd",
@@ -16675,6 +18764,40 @@
       "process_urls": []
     },
     {
+      "ptd_id": "rutor",
+      "schema": "nexusphp",
+      "urls": [
+        "https://rutor.info/",
+        "https://rutor.is/"
+      ],
+      "base_url": "https://rutor.info/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "rutracker",
       "schema": "abstractprivatesite",
       "urls": [
@@ -16682,6 +18805,39 @@
         "https://rutracker.net/"
       ],
       "base_url": "https://rutracker.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "rutrackerru",
+      "schema": "nexusphp",
+      "urls": [
+        "http://rutracker.ru/"
+      ],
+      "base_url": "http://rutracker.ru/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -16931,6 +19087,72 @@
       "process_urls": []
     },
     {
+      "ptd_id": "sexypics",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.sexy-pics.us/"
+      ],
+      "base_url": "https://www.sexy-pics.us/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "shanaproject",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.shanaproject.com/"
+      ],
+      "base_url": "https://www.shanaproject.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "shareisland",
       "schema": "unit3d",
       "urls": [
@@ -16970,6 +19192,39 @@
         "https://sharkpt.net/"
       ],
       "base_url": "https://sharkpt.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "showrss",
+      "schema": "nexusphp",
+      "urls": [
+        "https://showrss.info/"
+      ],
+      "base_url": "https://showrss.info/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -17092,6 +19347,39 @@
       "donor_bonus_multiplier": null,
       "ajax_referer": null,
       "ajax_disabled": true,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "skidrowrepack",
+      "schema": "nexusphp",
+      "urls": [
+        "https://skidrowrepack.com/"
+      ],
+      "base_url": "https://skidrowrepack.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
       "json_user_stats": null,
       "process_urls": []
     },
@@ -17362,6 +19650,39 @@
         "https://snakepop.art/"
       ],
       "base_url": "https://snakepop.art/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "sosulki",
+      "schema": "nexusphp",
+      "urls": [
+        "https://sosulki.bosk.cc/"
+      ],
+      "base_url": "https://sosulki.bosk.cc/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -18795,6 +21116,75 @@
       "process_urls": []
     },
     {
+      "ptd_id": "thepiratebay",
+      "schema": "nexusphp",
+      "urls": [
+        "https://thepiratebay.org/",
+        "https://thepiratebay.ninjaproxy1.com/",
+        "https://tpb.proxyninja.org/"
+      ],
+      "base_url": "https://thepiratebay.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "therarbg",
+      "schema": "nexusphp",
+      "urls": [
+        "https://therarbg.to/",
+        "https://therarbg.com/"
+      ],
+      "base_url": "https://therarbg.to/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "thevault",
       "schema": "tcg",
       "urls": [
@@ -19070,6 +21460,72 @@
       "process_urls": []
     },
     {
+      "ptd_id": "torlock",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.torlock.com/"
+      ],
+      "base_url": "https://www.torlock.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "torrent9",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www7.torrent9.to/"
+      ],
+      "base_url": "https://www7.torrent9.to/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "torrentday",
       "schema": "abstractprivatesite",
       "urls": [
@@ -19274,12 +21730,115 @@
       ]
     },
     {
+      "ptd_id": "torrentgalaxyclone",
+      "schema": "nexusphp",
+      "urls": [
+        "https://torrentgalaxy.online/",
+        "https://torrentgalaxy.info/"
+      ],
+      "base_url": "https://torrentgalaxy.online/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "torrenthub",
       "schema": "nexusphp",
       "urls": [
         "https://torrenthub.club/"
       ],
       "base_url": "https://torrenthub.club/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "torrenting",
+      "schema": "nexusphp",
+      "urls": [
+        "https://torrenting.com/",
+        "https://torrenting.me/"
+      ],
+      "base_url": "https://torrenting.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "torrentkitty",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.torrentkitty.ink/",
+        "https://www.torrentkitty.cam/",
+        "https://www.torrentkitty.io/"
+      ],
+      "base_url": "https://www.torrentkitty.ink/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -19497,6 +22056,39 @@
       ]
     },
     {
+      "ptd_id": "torrentparadise",
+      "schema": "nexusphp",
+      "urls": [
+        "https://torrentparadise.cl/"
+      ],
+      "base_url": "https://torrentparadise.cl/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "torrentscsv",
       "schema": "nexusphp",
       "urls": [
@@ -19536,6 +22128,72 @@
         "https://www.torrentseeds.org/"
       ],
       "base_url": "https://www.torrentseeds.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "torrentsome",
+      "schema": "nexusphp",
+      "urls": [
+        "https://torrentsome271.com/"
+      ],
+      "base_url": "https://torrentsome271.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "torrenttip",
+      "schema": "nexusphp",
+      "urls": [
+        "https://torrenttip251.top/"
+      ],
+      "base_url": "https://torrenttip251.top/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -20017,6 +22675,39 @@
       ]
     },
     {
+      "ptd_id": "traxary",
+      "schema": "unit3d",
+      "urls": [
+        "https://beta.traxary.com/"
+      ],
+      "base_url": "https://beta.traxary.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "tu88",
       "schema": "nexusphp",
       "urls": [
@@ -20245,6 +22936,41 @@
       ]
     },
     {
+      "ptd_id": "u3c3",
+      "schema": "nexusphp",
+      "urls": [
+        "https://u3c3.com/",
+        "https://u001.25img.com/",
+        "https://u002.25img.com/"
+      ],
+      "base_url": "https://u3c3.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "ubits",
       "schema": "nexusphp",
       "urls": [
@@ -20316,12 +23042,78 @@
       "process_urls": []
     },
     {
+      "ptd_id": "uindex",
+      "schema": "nexusphp",
+      "urls": [
+        "https://uindex.org/"
+      ],
+      "base_url": "https://uindex.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "ultrahd",
       "schema": "nexusphp",
       "urls": [
         "https://ultrahd.net/"
       ],
       "base_url": "https://ultrahd.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "unwalled",
+      "schema": "unit3d",
+      "urls": [
+        "https://unwalled.cc/"
+      ],
+      "base_url": "https://unwalled.cc/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -20388,6 +23180,105 @@
         "https://pt.vclib.online/"
       ],
       "base_url": "https://pt.vclib.online/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "vsthouse",
+      "schema": "nexusphp",
+      "urls": [
+        "https://vsthouse.ru/"
+      ],
+      "base_url": "https://vsthouse.ru/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "vstorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "https://vstorrent.org/"
+      ],
+      "base_url": "https://vstorrent.org/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "vsttorrents",
+      "schema": "nexusphp",
+      "urls": [
+        "https://vsttorrentz.net/"
+      ],
+      "base_url": "https://vsttorrentz.net/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -20598,6 +23489,41 @@
         "https://wintersakura.net/"
       ],
       "base_url": "https://wintersakura.net/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "worldtorrent",
+      "schema": "nexusphp",
+      "urls": [
+        "https://www.darkfox.ws/",
+        "https://www.wikibox.ws/",
+        "https://www.vidlox.ws/"
+      ],
+      "base_url": "https://www.darkfox.ws/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -21038,6 +23964,74 @@
       ]
     },
     {
+      "ptd_id": "xxxclub",
+      "schema": "nexusphp",
+      "urls": [
+        "https://xxxclub.to/",
+        "https://xxxclub.cc/",
+        "https://xxxclub.me/"
+      ],
+      "base_url": "https://xxxclub.to/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "xxxtor",
+      "schema": "nexusphp",
+      "urls": [
+        "https://xxxtor.com/"
+      ],
+      "base_url": "https://xxxtor.com/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
       "ptd_id": "ydypt",
       "schema": "nexusphp",
       "urls": [
@@ -21254,6 +24248,39 @@
         "https://pt.ying.us.kg/"
       ],
       "base_url": "https://pt.ying.us.kg/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "yts",
+      "schema": "nexusphp",
+      "urls": [
+        "https://yts.gg/"
+      ],
+      "base_url": "https://yts.gg/",
       "bonus_labels": [],
       "uploaded_labels": [],
       "downloaded_labels": [],
@@ -21649,6 +24676,72 @@
         "/plugin.php",
         "/plugin.php"
       ]
+    },
+    {
+      "ptd_id": "zamundalife",
+      "schema": "nexusphp",
+      "urls": [
+        "https://zamunda.life/"
+      ],
+      "base_url": "https://zamunda.life/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
+    },
+    {
+      "ptd_id": "zenith",
+      "schema": "unit3d",
+      "urls": [
+        "https://znth.cx/"
+      ],
+      "base_url": "https://znth.cx/",
+      "bonus_labels": [],
+      "uploaded_labels": [],
+      "downloaded_labels": [],
+      "uploaded_selectors": [],
+      "downloaded_selectors": [],
+      "bonus_selectors": [],
+      "ratio_selectors": [],
+      "seeding_selectors": [],
+      "leeching_selectors": [],
+      "message_selectors": [],
+      "level_selectors": [],
+      "bonus_per_hour_selectors": [],
+      "user_info_fields": {},
+      "user_info_processes": [],
+      "bonus_page_path": null,
+      "bonus_page_query": null,
+      "profile_path": null,
+      "profile_query": null,
+      "identity_path": null,
+      "identity_query": null,
+      "donor_bonus_multiplier": null,
+      "ajax_referer": null,
+      "ajax_disabled": false,
+      "json_user_stats": null,
+      "process_urls": []
     },
     {
       "ptd_id": "zhixing",
